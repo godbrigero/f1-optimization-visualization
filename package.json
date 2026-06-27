@@ -1,0 +1,40 @@
+{
+  "name": "f1-optimization-visualization",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.101.2",
+    "@trpc/client": "^11.18.0",
+    "@trpc/react-query": "^11.18.0",
+    "@trpc/server": "^11.18.0",
+    "ai": "^7.0.4",
+    "livekit-client": "^2.20.0",
+    "livekit-server-sdk": "^2.15.5",
+    "mongodb": "^7.4.0",
+    "next": "16.2.9",
+    "openai": "^6.45.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "superjson": "^2.2.6",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.9",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  },
+  "overrides": {
+    "postcss": "8.5.15"
+  }
+}
