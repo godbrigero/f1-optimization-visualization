@@ -299,59 +299,6 @@ function getDebugTone(event: string): VoiceDebugTone {
   return "warn";
 }
 
-function mentionsCustomDataset(text: string) {
-  const normalizedText = text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (normalizedText.length === 0) {
-    return false;
-  }
-
-  const mentionsFileSelector =
-    /\b(file|document|doc|docx|pdf|data|dataset|upload|attach|attachment|paperclip|addition)\s+(selector|picker|button|control|option)\b/.test(
-      normalizedText,
-    ) ||
-    /\b(pull|bring|show|open|pop|display)\s+(up\s+)?(the\s+)?(file|document|doc|docx|pdf|upload|attach|attachment|paperclip|addition)\b/.test(
-      normalizedText,
-    ) ||
-    /\b(additional|another|extra)\s+(file|document|doc|docx|pdf|upload|attachment|dataset|data)\b/.test(
-      normalizedText,
-    ) ||
-    /\b(upload|attach|select|choose|pick|add|import|load|provide|send)\s+(a\s+|an\s+|the\s+|my\s+|our\s+|own\s+)?(file|document|doc|docx|pdf)\b/.test(
-      normalizedText,
-    );
-
-  if (mentionsFileSelector) {
-    return true;
-  }
-
-  const explicitCustomData =
-    /\b(custom|my|our|own|uploaded|attached|local|external)\s+(data|dataset|file|document|doc|docx|pdf|spreadsheet|csv|excel|json|tsv)\b/.test(
-      normalizedText,
-    ) ||
-    /\b(data|dataset|file|document|doc|docx|pdf|spreadsheet|csv|excel|json|tsv)\s+(of\s+my\s+own|from\s+me|from\s+my\s+side)\b/.test(
-      normalizedText,
-    );
-
-  if (explicitCustomData) {
-    return true;
-  }
-
-  const mentionsDataArtifact =
-    /\b(dataset|data file|source data|file|document|doc|docx|pdf|spreadsheet|csv|xlsx|xls|excel|json|tsv)\b/.test(
-      normalizedText,
-    );
-  const mentionsAttachAction =
-    /\b(have|got|add|attach|upload|import|load|provide|send|use|using|include)\b/.test(
-      normalizedText,
-    );
-
-  return mentionsDataArtifact && mentionsAttachAction;
-}
-
 function mentionsStartAgentWork(text: string) {
   const normalizedText = text
     .toLowerCase()
@@ -363,14 +310,7 @@ function mentionsStartAgentWork(text: string) {
     return false;
   }
 
-  return (
-    /\b(done|finished|that is all|thats all|that s all|ready)\b.*\b(start|work|go|proceed|continue|next|handoff|switch)\b/.test(
-      normalizedText,
-    ) ||
-    /\b(get to work|start working|start the work|begin working|run it|build it|solve it|proceed|go ahead|next step|move on|continue to agents|switch to coach bron|quit voice|exit voice)\b/.test(
-      normalizedText,
-    )
-  );
+  return /\bforce coach bron handoff\b/.test(normalizedText);
 }
 
 const voiceGridSize = 11;
@@ -681,21 +621,45 @@ function TriangleFrame() {
 
 function CrownFrame({ liftLevel }: { liftLevel: number }) {
   const crownLift = Math.max(0, Math.min(1, liftLevel));
+  const crownParticles = [
+    { cx: 24, cy: 34, delay: "0ms", size: 1 },
+    { cx: 36, cy: 25, delay: "120ms", size: 1.25 },
+    { cx: 49, cy: 18, delay: "40ms", size: 1.35 },
+    { cx: 63, cy: 25, delay: "180ms", size: 1.15 },
+    { cx: 76, cy: 34, delay: "80ms", size: 1 },
+    { cx: 43, cy: 36, delay: "240ms", size: 0.85 },
+    { cx: 58, cy: 36, delay: "300ms", size: 0.85 },
+  ];
 
   return (
     <svg
       aria-hidden="true"
-      className="lk-crown-frame pointer-events-none absolute left-[46.5%] top-[-40%] z-[24] h-[82%] w-[82%] overflow-visible"
+      className="lk-crown-frame pointer-events-none absolute left-1/2 top-[-47%] z-[24] h-[84%] w-[84%] overflow-visible"
       viewBox="0 0 100 100"
       style={
         {
           "--lk-crown-lift": crownLift,
-          transform: `translateX(-50%) translateY(${-crownLift * 14}%) rotate(${
-            -14 + crownLift * 12
-          }deg) scale(${1 + crownLift * 0.045})`,
+          "--lk-crown-raise": `${-crownLift * 39}%`,
+          "--lk-crown-shift": `${-crownLift * 2.5}%`,
+          "--lk-crown-rotate": `${-9 + crownLift * 3}deg`,
+          "--lk-crown-scale": 1 + crownLift * 0.055,
         } as CSSProperties
       }
     >
+      <ellipse
+        className="lk-crown-light"
+        cx="50"
+        cy="42"
+        rx="34"
+        ry="28"
+      />
+      <ellipse
+        className="lk-crown-jewel-light"
+        cx="50"
+        cy="24"
+        rx="18"
+        ry="11"
+      />
       <path
         className="lk-crown-fill"
         d={`${CROWN_PRIMARY_PATH} ${CROWN_BASE_PATH}`}
@@ -712,6 +676,18 @@ function CrownFrame({ liftLevel }: { liftLevel: number }) {
         pathLength="100"
       />
       <path className="lk-crown-inner" d={CROWN_INNER_PATH} pathLength="100" />
+      <g className="lk-crown-particles" aria-hidden="true">
+        {crownParticles.map((particle) => (
+          <circle
+            key={`${particle.cx}-${particle.cy}`}
+            className="lk-crown-particle"
+            cx={particle.cx}
+            cy={particle.cy}
+            r={particle.size}
+            style={{ animationDelay: particle.delay }}
+          />
+        ))}
+      </g>
     </svg>
   );
 }
@@ -746,13 +722,17 @@ function VoiceSignalSquare({
     useState<GridCoordinate | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const clickPulseTimerRef = useRef<number | null>(null);
+  const crownLowerTimerRef = useRef<number | null>(null);
   const [isClickPulseActive, setIsClickPulseActive] = useState(false);
   const [clickBurst, setClickBurst] = useState(0);
+  const [isCrownRaised, setIsCrownRaised] = useState(false);
   const center = (voiceGridSize - 1) / 2;
   const combinedVoiceLevel = Math.max(voiceLevel, bronVoiceLevel);
   const bronPulse = active && bronVoiceLevel > 0.025 ? bronVoiceLevel : 0;
-  const crownLiftLevel =
-    active && !connecting ? Math.max(voiceLevel * 0.72, bronPulse) : 0;
+  const crownPreGenerationActive = isClickPulseActive || connecting;
+  const crownShouldRaise =
+    crownPreGenerationActive || active || summarizing;
+  const crownLiftLevel = isCrownRaised ? 1 : 0;
   const activeRadius = 1.1 + combinedVoiceLevel * 5.4;
   const haloRadius = activeRadius + 1.8;
   const scanTrail = useMemo(() => {
@@ -856,11 +836,37 @@ function VoiceSignalSquare({
       if (clickPulseTimerRef.current !== null) {
         window.clearTimeout(clickPulseTimerRef.current);
       }
+
+      if (crownLowerTimerRef.current !== null) {
+        window.clearTimeout(crownLowerTimerRef.current);
+      }
     };
   }, []);
 
+  useEffect(() => {
+    if (crownLowerTimerRef.current !== null) {
+      window.clearTimeout(crownLowerTimerRef.current);
+      crownLowerTimerRef.current = null;
+    }
+
+    const shouldStayRaised = crownShouldRaise;
+    const lowerDelay = active && !connecting && !summarizing ? 560 : 0;
+    crownLowerTimerRef.current = window.setTimeout(() => {
+      crownLowerTimerRef.current = null;
+      setIsCrownRaised(shouldStayRaised);
+    }, shouldStayRaised ? 0 : lowerDelay);
+
+    return () => {
+      if (crownLowerTimerRef.current !== null) {
+        window.clearTimeout(crownLowerTimerRef.current);
+        crownLowerTimerRef.current = null;
+      }
+    };
+  }, [active, connecting, crownShouldRaise, summarizing]);
+
   const shouldShowConnectionPulse =
     summarizing || connecting || isClickPulseActive;
+  const shouldShowPreGenerationLight = crownPreGenerationActive && !summarizing;
 
   return (
     <div className="relative grid w-full place-items-center py-10 sm:py-12">
@@ -922,8 +928,7 @@ function VoiceSignalSquare({
           }
           style={{ "--lk-bron-level": bronPulse } as CSSProperties}
           className={cn(
-            "group/signal relative cursor-pointer bg-transparent p-0 outline-none transition-[filter] duration-200",
-            "focus-visible:ring-3 focus-visible:ring-cyan-300/35",
+            "group/signal relative cursor-pointer bg-transparent p-0 outline-none transition-[filter] duration-200 focus-visible:outline-none",
             summarizing || active || connecting
               ? "drop-shadow-[0_0_30px_rgba(31,213,249,0.16)]"
               : "drop-shadow-none",
@@ -972,6 +977,16 @@ function VoiceSignalSquare({
           <TriangleSurface />
           <TriangleFrame />
           <CrownFrame liftLevel={crownLiftLevel} />
+          {shouldShowPreGenerationLight ? (
+            <svg
+              aria-hidden="true"
+              className="lk-pregeneration-snake"
+              viewBox="0 0 100 100"
+            >
+              <path className="lk-pregeneration-snake-track" d={ROUNDED_TRIANGLE_PATH} pathLength="100" />
+              <path className="lk-pregeneration-snake-line" d={ROUNDED_TRIANGLE_PATH} pathLength="100" />
+            </svg>
+          ) : null}
           {summarizing ? (
             <svg
               aria-hidden="true"
@@ -1180,6 +1195,7 @@ function VoiceDebugPanel({
   localSilenceMs,
   localSpeechMs,
   micLevel,
+  open,
   userState,
 }: {
   agentState: string;
@@ -1193,6 +1209,7 @@ function VoiceDebugPanel({
   localSilenceMs: number;
   localSpeechMs: number;
   micLevel: number;
+  open: boolean;
   userState: string;
 }) {
   const micPercent = Math.round(micLevel * 100);
@@ -1208,7 +1225,16 @@ function VoiceDebugPanel({
   );
 
   return (
-    <aside className="fixed bottom-4 left-4 z-[80] w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-cyan-200/14 bg-[#030607]/88 text-white shadow-[0_24px_70px_rgba(0,0,0,0.52),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-md">
+    <aside
+      id="voice-debug-panel"
+      aria-hidden={!open}
+      className={cn(
+        "fixed bottom-4 left-1/2 z-[80] w-[min(56rem,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-md border border-cyan-200/14 bg-[#030607]/90 text-white shadow-[0_24px_70px_rgba(0,0,0,0.52),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-md transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+        open
+          ? "translate-y-0 opacity-100"
+          : "pointer-events-none translate-y-[calc(100%+1.25rem)] opacity-0",
+      )}
+    >
       <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
         <div>
           <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-cyan-100/72">
@@ -1230,44 +1256,46 @@ function VoiceDebugPanel({
         </div>
       </div>
 
-      <div className="grid gap-2 px-3 py-3">
-        <div className="grid grid-cols-[4.6rem_1fr_2.8rem] items-center gap-2 text-[0.68rem]">
-          <span className="text-white/48">mic</span>
-          <span className="relative h-2 overflow-hidden rounded-[2px] bg-white/[0.055]">
-            <span
-              className={cn(
-                "absolute inset-y-0 left-0 rounded-[2px]",
-                localGateActive ? "bg-cyan-200" : "bg-cyan-300/44",
-              )}
-              style={{ width: `${micPercent}%` }}
-            />
-            <span
-              className="absolute inset-y-[-3px] w-px bg-[#f0d7a0]"
-              style={{ left: `${Math.min(100, thresholdPercent)}%` }}
-            />
-          </span>
-          <span className="text-right tabular-nums text-white/58">
-            {micPercent}%
-          </span>
-        </div>
+      <div className="grid gap-3 px-3 py-3 md:grid-cols-[1.1fr_1fr_1.25fr]">
+        <div className="grid gap-2">
+          <div className="grid grid-cols-[4.6rem_1fr_2.8rem] items-center gap-2 text-[0.68rem]">
+            <span className="text-white/48">mic</span>
+            <span className="relative h-2 overflow-hidden rounded-[2px] bg-white/[0.055]">
+              <span
+                className={cn(
+                  "absolute inset-y-0 left-0 rounded-[2px]",
+                  localGateActive ? "bg-cyan-200" : "bg-cyan-300/44",
+                )}
+                style={{ width: `${micPercent}%` }}
+              />
+              <span
+                className="absolute inset-y-[-3px] w-px bg-[#f0d7a0]"
+                style={{ left: `${Math.min(100, thresholdPercent)}%` }}
+              />
+            </span>
+            <span className="text-right tabular-nums text-white/58">
+              {micPercent}%
+            </span>
+          </div>
 
-        <div className="grid grid-cols-[4.6rem_1fr_2.8rem] items-center gap-2 text-[0.68rem]">
-          <span className="text-white/48">Bron</span>
-          <span className="h-2 overflow-hidden rounded-[2px] bg-white/[0.055]">
-            <span
-              className="block h-full rounded-[2px] bg-[#c9aa72]/72"
-              style={{ width: `${bronPercent}%` }}
-            />
-          </span>
-          <span className="text-right tabular-nums text-white/58">
-            {bronPercent}%
-          </span>
+          <div className="grid grid-cols-[4.6rem_1fr_2.8rem] items-center gap-2 text-[0.68rem]">
+            <span className="text-white/48">Bron</span>
+            <span className="h-2 overflow-hidden rounded-[2px] bg-white/[0.055]">
+              <span
+                className="block h-full rounded-[2px] bg-[#c9aa72]/72"
+                style={{ width: `${bronPercent}%` }}
+              />
+            </span>
+            <span className="text-right tabular-nums text-white/58">
+              {bronPercent}%
+            </span>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
           <div className="rounded-[4px] border border-white/8 bg-white/[0.035] p-2">
             <div className="flex items-center justify-between text-[0.66rem] text-white/44">
-              <span>speech hold</span>
+              <span>speech</span>
               <span className="tabular-nums">
                 {formatDebugMs(localSpeechMs)}
               </span>
@@ -1281,7 +1309,7 @@ function VoiceDebugPanel({
           </div>
           <div className="rounded-[4px] border border-white/8 bg-white/[0.035] p-2">
             <div className="flex items-center justify-between text-[0.66rem] text-white/44">
-              <span>silence hold</span>
+              <span>silence</span>
               <span className="tabular-nums">
                 {formatDebugMs(localSilenceMs)}
               </span>
@@ -1293,59 +1321,60 @@ function VoiceDebugPanel({
               />
             </span>
           </div>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 text-[0.68rem]">
-          <div className="rounded-[4px] border border-cyan-200/12 bg-cyan-200/[0.035] px-2 py-1.5">
-            <span className="block text-white/40">user state</span>
+          <div className="rounded-[4px] border border-cyan-200/12 bg-cyan-200/[0.035] px-2 py-1.5 text-[0.68rem]">
+            <span className="block text-white/40">user</span>
             <span className="mt-0.5 block font-medium text-cyan-50/86">
               {userState}
             </span>
           </div>
-          <div className="rounded-[4px] border border-[#c9aa72]/16 bg-[#c9aa72]/[0.04] px-2 py-1.5">
-            <span className="block text-white/40">agent state</span>
+          <div className="rounded-[4px] border border-[#c9aa72]/16 bg-[#c9aa72]/[0.04] px-2 py-1.5 text-[0.68rem]">
+            <span className="block text-white/40">agent</span>
             <span className="mt-0.5 block font-medium text-[#f0d7a0]/88">
               {agentState}
             </span>
           </div>
         </div>
 
-        <div className="min-h-6 rounded-[4px] border border-white/8 bg-black/22 px-2 py-1.5 text-[0.68rem] text-white/58">
-          {lastTranscript || "No transcript yet."}
-        </div>
+        <div className="grid gap-2">
+          <div className="min-h-6 rounded-[4px] border border-white/8 bg-black/22 px-2 py-1.5 text-[0.68rem] text-white/58">
+            {lastTranscript || "No transcript yet."}
+          </div>
 
-        <div className="grid max-h-36 gap-1 overflow-hidden">
-          {entries.length === 0 ? (
-            <p className="text-[0.67rem] text-white/34">
-              Waiting for voice events.
-            </p>
-          ) : (
-            entries.map((entry) => (
-              <div
-                key={entry.id}
-                className="grid grid-cols-[4.4rem_5.9rem_1fr] gap-1.5 text-[0.64rem] leading-4"
-              >
-                <span className="tabular-nums text-white/30">
-                  {formatDebugTime(entry.time)}
-                </span>
-                <span
-                  className={cn(
-                    "truncate font-medium",
-                    entry.tone === "error"
-                      ? "text-red-300"
-                      : entry.tone === "good"
-                        ? "text-cyan-100"
-                        : entry.tone === "warn"
-                          ? "text-[#f0d7a0]"
-                          : "text-white/48",
-                  )}
+          <div className="grid max-h-20 gap-1 overflow-hidden">
+            {entries.length === 0 ? (
+              <p className="text-[0.67rem] text-white/34">
+                Waiting for voice events.
+              </p>
+            ) : (
+              entries.slice(0, 3).map((entry) => (
+                <div
+                  key={entry.id}
+                  className="grid grid-cols-[4.4rem_5.9rem_1fr] gap-1.5 text-[0.64rem] leading-4"
                 >
-                  {entry.event.replaceAll("_", " ")}
-                </span>
-                <span className="truncate text-white/42">{entry.detail}</span>
-              </div>
-            ))
-          )}
+                  <span className="tabular-nums text-white/30">
+                    {formatDebugTime(entry.time)}
+                  </span>
+                  <span
+                    className={cn(
+                      "truncate font-medium",
+                      entry.tone === "error"
+                        ? "text-red-300"
+                        : entry.tone === "good"
+                          ? "text-cyan-100"
+                          : entry.tone === "warn"
+                            ? "text-[#f0d7a0]"
+                            : "text-white/48",
+                    )}
+                  >
+                    {entry.event.replaceAll("_", " ")}
+                  </span>
+                  <span className="truncate text-white/42">
+                    {entry.detail}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
     </aside>
@@ -1394,6 +1423,7 @@ export function SpeechInputWorkbench() {
   const [localGateActive, setLocalGateActive] = useState(false);
   const [localSilenceMs, setLocalSilenceMs] = useState(0);
   const [localSpeechMs, setLocalSpeechMs] = useState(0);
+  const [showVoiceDebug, setShowVoiceDebug] = useState(false);
   const [userDebugState, setUserDebugState] = useState("idle");
   const [voiceDebugConfig, setVoiceDebugConfig] = useState<VoiceDebugConfig>(
     DEFAULT_VOICE_DEBUG_CONFIG,
@@ -1405,6 +1435,7 @@ export function SpeechInputWorkbench() {
   const hasDataInput = fileName.length > 0;
   const shouldShowDatasetUpload = isDatasetUploadPrompted || hasDataInput;
   const tokenMutation = api.livekit.createToken.useMutation();
+  const classifyIntentMutation = api.conversation.classifyIntent.useMutation();
   const summarizeMutation = api.conversation.summarize.useMutation();
 
   function handleFiles(fileList: FileList | null) {
@@ -1852,6 +1883,43 @@ export function SpeechInputWorkbench() {
     });
   }
 
+  async function classifyUserIntent(messages: ConversationMessage[]) {
+    if (isSummarizingRef.current || handoffTimerRef.current) {
+      return;
+    }
+
+    try {
+      const { intent } = await classifyIntentMutation.mutateAsync({
+        messages: messages.slice(-8),
+      });
+
+      if (intent === "show_dataset_upload") {
+        addVoiceDebugEntry(
+          "model_intent_upload",
+          "classifier requested upload tray",
+          "good",
+        );
+        showDatasetUploadPrompt();
+        return;
+      }
+
+      if (intent === "start_agent_work") {
+        addVoiceDebugEntry(
+          "model_intent_handoff",
+          "classifier requested Coach Bron handoff",
+          "good",
+        );
+        startAgentWorkHandoff();
+      }
+    } catch (error) {
+      addVoiceDebugEntry(
+        "model_intent_failed",
+        error instanceof Error ? error.message.slice(0, 96) : "intent failed",
+        "warn",
+      );
+    }
+  }
+
   function handleTranscriptText(
     identity: string,
     text: string,
@@ -1877,27 +1945,25 @@ export function SpeechInputWorkbench() {
       transcript.slice(0, 96),
       role === "assistant" ? "good" : "neutral",
     );
+    const nextConversation = [
+      ...conversationRef.current,
+      { role, content: transcript },
+    ];
     appendConversationMessage({ role, content: transcript });
 
     if (role === "user") {
       spokenInputRef.current = transcript;
-      const shouldShowUploadPrompt = mentionsCustomDataset(transcript);
-
-      if (shouldShowUploadPrompt) {
-        addVoiceDebugEntry(
-          "client_upload_fallback",
-          "final transcript matched upload intent",
-          "good",
-        );
-        showDatasetUploadPrompt();
-      } else if (mentionsStartAgentWork(transcript)) {
+      if (mentionsStartAgentWork(transcript)) {
         addVoiceDebugEntry(
           "client_handoff_fallback",
           "final transcript matched handoff intent",
           "good",
         );
         startAgentWorkHandoff();
+        return;
       }
+
+      void classifyUserIntent(nextConversation);
     }
   }
 
@@ -2218,7 +2284,17 @@ export function SpeechInputWorkbench() {
 
   useEffect(() => {
     function handleEscapeKey(event: KeyboardEvent) {
-      if (event.key !== "Escape" || (!isListening && !liveKitRoomRef.current)) {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      if (showVoiceDebug) {
+        event.preventDefault();
+        setShowVoiceDebug(false);
+        return;
+      }
+
+      if (!isListening && !liveKitRoomRef.current) {
         return;
       }
 
@@ -2264,7 +2340,7 @@ export function SpeechInputWorkbench() {
     window.addEventListener("keydown", handleEscapeKey);
 
     return () => window.removeEventListener("keydown", handleEscapeKey);
-  }, [isListening]);
+  }, [isListening, showVoiceDebug]);
 
   async function continueToAgents() {
     if (hasStartedRoutingRef.current) {
@@ -2351,14 +2427,17 @@ export function SpeechInputWorkbench() {
         localSilenceMs={localSilenceMs}
         localSpeechMs={localSpeechMs}
         micLevel={micLevel}
+        open={showVoiceDebug}
         userState={userDebugState}
       />
 
       <header className="relative z-20 flex h-20 items-center justify-between">
         <button
           type="button"
-          onClick={() => router.push("/speech")}
-          className="text-base font-semibold tracking-[0.16em] text-white/88 transition hover:text-white"
+          aria-controls="voice-debug-panel"
+          aria-expanded={showVoiceDebug}
+          onClick={() => setShowVoiceDebug((isOpen) => !isOpen)}
+          className="text-base font-semibold tracking-[0.16em] text-white/88 transition hover:text-white focus-visible:ring-3 focus-visible:ring-cyan-300/28"
         >
           Lebronsseiur
         </button>

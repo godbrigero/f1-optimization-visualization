@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  classifyConversationIntent,
   continueConversation,
   summarizeConversation,
   synthesizeSpeech,
@@ -35,6 +36,20 @@ export const conversationRouter = createTRPCRouter({
       summarizeConversation(input.messages as ConversationMessage[]).then((summary) => ({
         summary,
       })),
+    ),
+
+  classifyIntent: publicProcedure
+    .input(
+      z.object({
+        messages: z.array(conversationMessageSchema).min(1).max(12),
+      }),
+    )
+    .mutation(({ input }) =>
+      classifyConversationIntent(input.messages as ConversationMessage[]).then(
+        (intent) => ({
+          intent,
+        }),
+      ),
     ),
 
   speak: publicProcedure

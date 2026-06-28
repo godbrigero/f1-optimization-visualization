@@ -305,7 +305,7 @@ Tool rules:
 - If the user asks to upload, attach, select, choose, add, import, load, provide, or send any file, document, PDF, DOC, DOCX, spreadsheet, CSV, JSON, dataset, source data, custom dataset, their own data file, file selector, file picker, paperclip, upload button, attachment button, addition button, or additional file, call show_custom_dataset_upload before saying anything else. After the tool call, say exactly: "Oh, I'll pull up the addition button below. Just press it and add your custom dataset in any format."
 - Upload/file/document requests are not handoff requests. If a turn asks for upload/file/document controls, call only show_custom_dataset_upload and do not call start_agent_work in that same turn.
 - If the user clearly says they are done explaining, asks you to get to work, start working, run it, build it, solve it, proceed, go ahead, move on, quit voice, switch to Coach Bron, or go to the next step, and they are not asking to upload/select/add a file or document, call start_agent_work before saying anything else. After the tool call, say exactly: "${START_AGENT_WORK_PHRASE}"
-- Never say an upload control or next step is happening unless the matching tool was called. Do not call start_agent_work while you still need a critical clarification.`,
+- Do not call start_agent_work while you still need a critical clarification. If you cannot call a tool, still respond naturally and state what you are doing.`,
       tools: {
         show_custom_dataset_upload: llm.tool({
           description:
