@@ -1,7 +1,8 @@
 "use client";
 
-import { Activity, GitBranch, PanelLeft, RotateCcw, X } from "lucide-react";
+import { Activity, Database, GitBranch, PanelLeft, RotateCcw, X } from "lucide-react";
 import { type PointerEvent, type WheelEvent, useEffect, useRef, useState } from "react";
+import { formatFileSize, getAttachedDataset, type AttachedDatasetMetadata } from "@/lib/attached-dataset";
 
 type AgentNode = {
   id: string;
@@ -35,6 +36,11 @@ type AddIterationDetail = {
 
 type IterationWindow = Window & {
   addAgentGraphIteration?: (detail?: AddIterationDetail) => void;
+};
+
+type AttachedDataset = {
+  file?: File;
+  metadata: AttachedDatasetMetadata;
 };
 
 type GraphViewBox = {
@@ -259,6 +265,13 @@ export function AgentGraph() {
 
     return window.sessionStorage.getItem("f1-agent-conversation-summary") ?? "";
   });
+  const [attachedDataset] = useState<AttachedDataset | null>(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    return getAttachedDataset();
+  });
   const [activeIterationId, setActiveIterationId] = useState(1);
   const [viewBox, setViewBox] = useState<GraphViewBox>(initialViewBox);
   const [isPanning, setIsPanning] = useState(false);
@@ -455,12 +468,35 @@ export function AgentGraph() {
     >
       <h1 className="sr-only">Interconnected agent node graph</h1>
 
-      {conversationSummary ? (
+      {conversationSummary || attachedDataset ? (
         <section className="absolute left-1/2 top-5 z-20 w-[min(760px,calc(100vw-2.5rem))] -translate-x-1/2 rounded-md border border-white/14 bg-black/82 px-4 py-3 shadow-[0_18px_50px_rgba(0,0,0,0.38)] backdrop-blur-xl">
-          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/38">
-            Conversation summary
-          </div>
-          <p className="mt-2 line-clamp-3 text-sm leading-6 text-white/72">{conversationSummary}</p>
+          {conversationSummary ? (
+            <>
+              <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/38">
+                Conversation summary
+              </div>
+              <p className="mt-2 line-clamp-3 text-sm leading-6 text-white/72">{conversationSummary}</p>
+            </>
+          ) : null}
+
+          {attachedDataset ? (
+            <div className={conversationSummary ? "mt-3 border-t border-white/10 pt-3" : ""}>
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="grid size-8 shrink-0 place-items-center rounded-md border border-emerald-300/30 bg-emerald-300/[0.08] text-emerald-100">
+                  <Database className="size-4" />
+                </span>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-emerald-100">
+                    {attachedDataset.metadata.name}
+                  </div>
+                  <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.12em] text-white/38">
+                    {formatFileSize(attachedDataset.metadata.size)} / {attachedDataset.metadata.type}
+                    {attachedDataset.file ? " / transferred" : " / metadata only"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : null}
 

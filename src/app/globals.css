@@ -284,6 +284,40 @@
   }
 }
 
+.lk-loading-snake {
+  position: absolute;
+  inset: -12px;
+  z-index: 30;
+  pointer-events: none;
+  overflow: visible;
+  filter: drop-shadow(0 0 12px rgba(31, 213, 249, 0.22));
+}
+
+.lk-loading-snake-track,
+.lk-loading-snake-line {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.lk-loading-snake-track {
+  stroke: rgba(31, 213, 249, 0.12);
+  stroke-width: 0.8;
+}
+
+.lk-loading-snake-line {
+  stroke: rgba(220, 251, 255, 0.92);
+  stroke-width: 1.6;
+  stroke-linecap: square;
+  stroke-dasharray: 13 87;
+  animation: lk-loading-snake 920ms linear infinite;
+}
+
+@keyframes lk-loading-snake {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
 @keyframes lk-square-side-flash {
   0% {
     border-color: rgba(31, 213, 249, 0);
@@ -336,6 +370,7 @@
   }
 
   [class*="lk-ambient-star"],
+  .lk-loading-snake,
   [class*="lk-square-side-flash"],
   [class*="lk-square-snake"],
   [class*="lk-shimmer-quad"] {

@@ -81,10 +81,17 @@ const agentName = process.env.LIVEKIT_AGENT_NAME || process.env.LIVEKIT_AGENT_ID
 const agentId = process.env.LIVEKIT_AGENT_ID || agentName;
 const CUSTOM_DATASET_UPLOAD_TOPIC = "lebronsseiur.custom_dataset_upload";
 const START_AGENT_WORK_TOPIC = "lebronsseiur.start_agent_work";
+const START_AGENT_WORK_PHRASE = "Ok, redirecting you to Coach Bron. Stand by for context switch.";
 
 export default defineAgent({
   entry: async (ctx) => {
     const session = new voice.AgentSession({
+      vad: new inference.VAD({
+        model: "silero",
+        minSpeechDuration: 30,
+        minSilenceDuration: 180,
+        activationThreshold: 0.42,
+      }),
       stt: new inference.STT({
         model: sttModel,
         language: "en",
@@ -113,11 +120,12 @@ export default defineAgent({
           max_buffer_delay_ms: optionalNumberEnv("LIVEKIT_AGENT_TTS_MAX_BUFFER_DELAY_MS", 120),
         },
       }),
-      aecWarmupDuration: 400,
+      aecWarmupDuration: null,
       turnHandling: {
+        turnDetection: "vad",
         preemptiveGeneration: {
           enabled: true,
-          preemptiveTts: false,
+          preemptiveTts: true,
           maxSpeechDuration: 8000,
           maxRetries: 3,
         },
@@ -135,7 +143,7 @@ export default defineAgent({
     const agent = new voice.Agent({
       id: agentId,
       instructions:
-        "You are Bron, a fast voice agent for a problem-solving app. Speak in short, confident sentences under 18 words unless asked for detail. Ask one clear follow-up when the user is vague. Do not mention implementation details unless asked. If the user mentions having, needing, uploading, attaching, importing, or using a custom dataset or their own data file, decide that they need the custom dataset upload control. Call show_custom_dataset_upload, then say exactly: \"Oh, I'll pull up the addition button below. Just press it and add your custom dataset in any format.\" Keep the voice conversation going after saying that. When the user clearly says they are done explaining, asks you to get to work, start, run it, build it, solve it, or proceed, call start_agent_work. Do not call start_agent_work while you still need a critical clarification.",
+        `You are Bron, a fast voice agent for a problem-solving app. Speak in short, confident sentences under 18 words unless asked for detail. Ask one clear follow-up when the user is vague. Do not mention implementation details unless asked. If the user mentions having, needing, uploading, attaching, importing, or using a custom dataset or their own data file, decide that they need the custom dataset upload control. Call show_custom_dataset_upload, then say exactly: "Oh, I'll pull up the addition button below. Just press it and add your custom dataset in any format." Keep the voice conversation going after saying that. When the user clearly says they are done explaining, asks you to get to work, start, run it, build it, solve it, or proceed, call start_agent_work, then say exactly: "${START_AGENT_WORK_PHRASE}" Do not call start_agent_work while you still need a critical clarification.`,
       tools: {
         show_custom_dataset_upload: llm.tool({
           description:
@@ -164,7 +172,7 @@ export default defineAgent({
               { topic: START_AGENT_WORK_TOPIC },
             );
 
-            return "Starting the agent work now.";
+            return START_AGENT_WORK_PHRASE;
           },
         }),
       },

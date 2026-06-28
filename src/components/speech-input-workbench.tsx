@@ -10,7 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useRouter } from "next/navigation";
-import { LayoutDashboard, Paperclip } from "lucide-react";
+import { LogOut, Paperclip } from "lucide-react";
 import {
   createAudioAnalyser,
   Room,
@@ -22,6 +22,7 @@ import {
   type RemoteAudioTrack,
   type RemoteTrack,
 } from "livekit-client";
+import { ATTACHED_DATASET_STORAGE_KEY, storeAttachedDataset, type AttachedDatasetWindow } from "@/lib/attached-dataset";
 import { cn } from "@/lib/utils";
 import { api } from "@/trpc/react";
 
@@ -30,6 +31,8 @@ const TRANSCRIPTION_FINAL_ATTRIBUTE = "lk.transcription_final";
 const CUSTOM_DATASET_UPLOAD_TOPIC = "lebronsseiur.custom_dataset_upload";
 const START_AGENT_WORK_TOPIC = "lebronsseiur.start_agent_work";
 const VOICE_ROOM_PREFIX = "lebronsseiur-model-conversation";
+const CONVERSATION_MESSAGES_STORAGE_KEY = "f1-agent-conversation-messages";
+const START_AGENT_WORK_HANDOFF_DELAY_MS = 4200;
 
 type ConversationMessage = {
   role: "user" | "assistant";
@@ -54,6 +57,44 @@ function getRoleFromIdentity(identity: string): ConversationMessage["role"] {
 
 function getDisplaySpeaker(role: ConversationMessage["role"]) {
   return role === "user" ? "You" : "Agent";
+}
+
+function isConversationMessage(value: unknown): value is ConversationMessage {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const message = value as Partial<ConversationMessage>;
+
+  return (
+    (message.role === "user" || message.role === "assistant") &&
+    typeof message.content === "string" &&
+    message.content.trim().length > 0
+  );
+}
+
+function loadStoredConversationMessages() {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  const storedMessages = window.sessionStorage.getItem(CONVERSATION_MESSAGES_STORAGE_KEY);
+
+  if (!storedMessages) {
+    return [];
+  }
+
+  try {
+    const parsedMessages = JSON.parse(storedMessages);
+
+    return Array.isArray(parsedMessages) ? parsedMessages.filter(isConversationMessage) : [];
+  } catch {
+    return [];
+  }
+}
+
+function storeConversationMessages(messages: ConversationMessage[]) {
+  window.sessionStorage.setItem(CONVERSATION_MESSAGES_STORAGE_KEY, JSON.stringify(messages));
 }
 
 function mentionsCustomDataset(text: string) {
@@ -301,21 +342,29 @@ function ShimmerBorder({ enabled }: { enabled: boolean }) {
 function VoiceSignalSquare({
   active,
   connecting,
+  contextBridgeActive,
+  contextAttached,
+  summarizing,
   voiceLevel,
   onToggle,
 }: {
   active: boolean;
   connecting: boolean;
+  contextBridgeActive: boolean;
+  contextAttached: boolean;
+  summarizing: boolean;
   voiceLevel: number;
   onToggle: () => void;
 }) {
-  const state: VoiceGridState = active && !connecting ? "listening" : "connecting";
-  const { path: signalPath, step: signalStep } = useLiveKitPattern(state, state === "connecting" ? 210 : 120);
+  const state: VoiceGridState = summarizing || connecting || !active ? "connecting" : "listening";
+  const { path: signalPath, step: signalStep } = useLiveKitPattern(state, summarizing ? 96 : state === "connecting" ? 210 : 120);
   const gridRef = useRef<HTMLSpanElement>(null);
   const [pointerCoordinate, setPointerCoordinate] = useState<GridCoordinate | null>(null);
   const [cursorPosition, setCursorPosition] = useState<CursorPosition | null>(null);
   const [isCursorInside, setIsCursorInside] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const clickPulseTimerRef = useRef<number | null>(null);
+  const [isClickPulseActive, setIsClickPulseActive] = useState(false);
   const [clickBurst, setClickBurst] = useState(0);
   const center = (voiceGridSize - 1) / 2;
   const activeRadius = 1.1 + voiceLevel * 5.4;
@@ -379,11 +428,36 @@ function VoiceSignalSquare({
   }
 
   function handleSquareClick() {
-    setClickBurst((currentBurst) => currentBurst + 1);
+    if (summarizing) {
+      return;
+    }
+
+    if (!active) {
+      setClickBurst((currentBurst) => currentBurst + 1);
+      setIsClickPulseActive(true);
+
+      if (clickPulseTimerRef.current !== null) {
+        window.clearTimeout(clickPulseTimerRef.current);
+      }
+
+      clickPulseTimerRef.current = window.setTimeout(() => {
+        setIsClickPulseActive(false);
+        clickPulseTimerRef.current = null;
+      }, 2000);
+    }
+
     onToggle();
   }
 
-  const shouldShowConnectionPulse = connecting || clickBurst > 0;
+  useEffect(() => {
+    return () => {
+      if (clickPulseTimerRef.current !== null) {
+        window.clearTimeout(clickPulseTimerRef.current);
+      }
+    };
+  }, []);
+
+  const shouldShowConnectionPulse = summarizing || connecting || isClickPulseActive;
 
   return (
     <div className="relative grid w-full place-items-center py-10 sm:py-12">
@@ -429,15 +503,17 @@ function VoiceSignalSquare({
         <button
           type="button"
           onClick={handleSquareClick}
+          disabled={summarizing}
           data-voice-square="true"
           aria-pressed={active}
-          aria-label={active ? "End voice conversation" : "Start voice conversation"}
+          aria-label={summarizing ? "Summarizing task" : active ? "End voice conversation" : "Start voice conversation"}
           className={cn(
             "group/signal relative cursor-pointer rounded-lg bg-[#030303] p-0 outline-none transition-[box-shadow] duration-200",
             "focus-visible:ring-3 focus-visible:ring-cyan-300/35",
-            active || connecting
+            summarizing || active || connecting
               ? "shadow-[0_0_0_1px_rgba(31,213,249,0.28),0_0_30px_rgba(31,213,249,0.12)]"
               : "shadow-none",
+            summarizing && "cursor-default shadow-[0_0_0_1px_rgba(31,213,249,0.42),0_0_44px_rgba(31,213,249,0.2)]",
           )}
           onPointerDown={(event) => {
             if (!updatePointerCoordinate(event)) {
@@ -482,17 +558,47 @@ function VoiceSignalSquare({
           onMouseMove={updatePointerCoordinate}
         >
           <ShimmerBorder enabled />
+          {summarizing ? (
+            <svg
+              aria-hidden="true"
+              className="lk-loading-snake"
+              viewBox="0 0 100 100"
+            >
+              <rect className="lk-loading-snake-track" x="2" y="2" width="96" height="96" rx="4" pathLength="100" />
+              <rect className="lk-loading-snake-line" x="2" y="2" width="96" height="96" rx="4" pathLength="100" />
+            </svg>
+          ) : null}
           {shouldShowConnectionPulse ? (
             <span
-              key={connecting ? "connecting" : clickBurst}
+              key={clickBurst}
               aria-hidden="true"
               className={cn(
                 "pointer-events-none absolute -inset-2 z-20 rounded-[10px] border border-transparent",
-                connecting
+                connecting || summarizing
                   ? "animate-[lk-square-side-flash_2s_ease-in-out_infinite]"
                   : "animate-[lk-square-side-flash_2s_ease-out_1]",
               )}
             />
+          ) : null}
+          {contextBridgeActive ? (
+            <span
+              aria-hidden="true"
+              className={cn(
+                "pointer-events-none absolute bottom-[-1.95rem] left-1/2 z-[-1] h-10 w-[5.8rem] -translate-x-1/2 rounded-b-[5px] border-x border-b bg-gradient-to-b transition duration-300",
+                contextAttached
+                  ? "border-[#c9aa72]/30 from-[#c9aa72]/[0.09] via-white/[0.025] to-transparent shadow-[0_22px_42px_rgba(201,170,114,0.08)]"
+                  : "border-cyan-200/22 from-cyan-300/[0.075] via-white/[0.018] to-transparent shadow-[0_22px_42px_rgba(34,211,238,0.08)]",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute left-1/2 top-2 h-[calc(100%-0.7rem)] w-px -translate-x-1/2",
+                  contextAttached
+                    ? "bg-gradient-to-b from-[#f0d7a0]/55 via-[#c9aa72]/24 to-transparent"
+                    : "bg-gradient-to-b from-cyan-100/52 via-cyan-300/24 to-transparent",
+                )}
+              />
+            </span>
           ) : null}
           <span
             aria-hidden="true"
@@ -578,20 +684,22 @@ export function SpeechInputWorkbench() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const responseTimerRef = useRef<number | null>(null);
   const agentWaitTimerRef = useRef<number | null>(null);
+  const handoffTimerRef = useRef<number | null>(null);
   const liveKitRoomRef = useRef<Room | null>(null);
   const micAnalyserRef = useRef<AudioAnalyserHandle | null>(null);
   const micAnalyserFrameRef = useRef<number | null>(null);
   const micLevelRef = useRef(0);
   const remoteAudioElementsRef = useRef<HTMLMediaElement[]>([]);
   const attachedAudioTrackIdsRef = useRef<Set<string>>(new Set());
-  const conversationRef = useRef<ConversationMessage[]>([]);
+  const conversationRef = useRef<ConversationMessage[]>(loadStoredConversationMessages());
   const spokenInputRef = useRef("");
-  const fileNameRef = useRef("");
   const isSummarizingRef = useRef(false);
+  const hasStartedRoutingRef = useRef(false);
   const [fileName, setFileName] = useState("");
   const [isDatasetUploadPrompted, setIsDatasetUploadPrompted] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isConnectingVoice, setIsConnectingVoice] = useState(false);
+  const [isSummarizing, setIsSummarizing] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
   const [, setVoiceResponse] = useState("");
   const hasDataInput = fileName.length > 0;
@@ -603,24 +711,27 @@ export function SpeechInputWorkbench() {
     const file = fileList?.[0];
 
     if (file) {
-      fileNameRef.current = file.name;
+      storeAttachedDataset(file);
       setFileName(file.name);
       setIsDatasetUploadPrompted(true);
-
-      window.sessionStorage.setItem(
-        "f1-agent-attached-dataset",
-        JSON.stringify({
-          lastModified: file.lastModified,
-          name: file.name,
-          size: file.size,
-          type: file.type || "unknown",
-        }),
-      );
     }
   }
 
   function showDatasetUploadPrompt() {
     setIsDatasetUploadPrompted(true);
+  }
+
+  function appendConversationMessage(message: ConversationMessage) {
+    const currentConversation = conversationRef.current;
+    const lastMessage = currentConversation.at(-1);
+
+    if (lastMessage?.role === message.role && lastMessage.content === message.content) {
+      return;
+    }
+
+    const nextConversation = [...currentConversation, message];
+    conversationRef.current = nextConversation;
+    storeConversationMessages(nextConversation);
   }
 
   function showTemporaryResponse(message: string, timeout = 4200) {
@@ -727,6 +838,10 @@ export function SpeechInputWorkbench() {
       if (agentWaitTimerRef.current) {
         window.clearTimeout(agentWaitTimerRef.current);
       }
+
+      if (handoffTimerRef.current) {
+        window.clearTimeout(handoffTimerRef.current);
+      }
     };
   }, [router]);
 
@@ -782,6 +897,7 @@ export function SpeechInputWorkbench() {
     const room = liveKitRoomRef.current;
     liveKitRoomRef.current = null;
     setIsListening(false);
+    setIsConnectingVoice(false);
     clearVoiceResponse();
     clearAgentWaitTimer();
     stopMicAnalyser();
@@ -793,6 +909,27 @@ export function SpeechInputWorkbench() {
 
     await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
     room.disconnect();
+  }
+
+  async function handleSignOut() {
+    if (handoffTimerRef.current) {
+      window.clearTimeout(handoffTimerRef.current);
+      handoffTimerRef.current = null;
+    }
+
+    await stopLiveKitRoom();
+    conversationRef.current = [];
+    spokenInputRef.current = "";
+    isSummarizingRef.current = false;
+    hasStartedRoutingRef.current = false;
+    setIsSummarizing(false);
+    setFileName("");
+    setIsDatasetUploadPrompted(false);
+    window.sessionStorage.removeItem(CONVERSATION_MESSAGES_STORAGE_KEY);
+    window.sessionStorage.removeItem("f1-agent-conversation-summary");
+    window.sessionStorage.removeItem(ATTACHED_DATASET_STORAGE_KEY);
+    delete (window as AttachedDatasetWindow).__f1AgentAttachedDataset;
+    router.push("/");
   }
 
   function handleTrackSubscribed(
@@ -861,12 +998,7 @@ export function SpeechInputWorkbench() {
       return;
     }
 
-    const currentConversation = conversationRef.current;
-    const lastMessage = currentConversation.at(-1);
-
-    if (!(lastMessage?.role === role && lastMessage.content === transcript)) {
-      conversationRef.current = [...currentConversation, { role, content: transcript }];
-    }
+    appendConversationMessage({ role, content: transcript });
 
     if (role === "user") {
       spokenInputRef.current = transcript;
@@ -894,7 +1026,20 @@ export function SpeechInputWorkbench() {
       }
     }
 
-    await continueToAgents();
+    startAgentWorkHandoff();
+  }
+
+  function startAgentWorkHandoff() {
+    if (isSummarizingRef.current || handoffTimerRef.current) {
+      return;
+    }
+
+    isSummarizingRef.current = true;
+    setIsSummarizing(true);
+    handoffTimerRef.current = window.setTimeout(() => {
+      handoffTimerRef.current = null;
+      void continueToAgents();
+    }, START_AGENT_WORK_HANDOFF_DELAY_MS);
   }
 
   async function handleTranscriptionStream(
@@ -954,6 +1099,7 @@ export function SpeechInputWorkbench() {
 
       room.on(RoomEvent.ParticipantConnected, (participant) => {
         if (!participant.identity.startsWith("speaker-")) {
+          setIsConnectingVoice(false);
           clearAgentWaitTimer();
           showTemporaryResponse("Voice agent connected. Speak now.", 2600);
         }
@@ -986,6 +1132,7 @@ export function SpeechInputWorkbench() {
       room.on(RoomEvent.Disconnected, () => {
         liveKitRoomRef.current = null;
         setIsListening(false);
+        setIsConnectingVoice(false);
         clearAgentWaitTimer();
         stopMicAnalyser();
         detachRemoteAudio();
@@ -1019,6 +1166,7 @@ export function SpeechInputWorkbench() {
 
       room.remoteParticipants.forEach((participant) => {
         if (!participant.identity.startsWith("speaker-")) {
+          setIsConnectingVoice(false);
           clearAgentWaitTimer();
           showTemporaryResponse("Voice agent connected. Speak now.", 2600);
         }
@@ -1028,8 +1176,9 @@ export function SpeechInputWorkbench() {
         });
       });
       showTemporaryResponse("Mic connected. Waiting for speech...", 3000);
-    } finally {
+    } catch (error) {
       setIsConnectingVoice(false);
+      throw error;
     }
   }
 
@@ -1044,6 +1193,7 @@ export function SpeechInputWorkbench() {
     } catch (error) {
       liveKitRoomRef.current = null;
       setIsListening(false);
+      setIsConnectingVoice(false);
       clearAgentWaitTimer();
       showTemporaryResponse(error instanceof Error ? error.message : "Could not connect LiveKit.");
     }
@@ -1098,17 +1248,27 @@ export function SpeechInputWorkbench() {
   }, [isListening]);
 
   async function continueToAgents() {
-    if (isSummarizingRef.current) {
+    if (hasStartedRoutingRef.current) {
       return;
     }
 
+    hasStartedRoutingRef.current = true;
+
+    if (!isSummarizingRef.current) {
+      isSummarizingRef.current = true;
+      setIsSummarizing(true);
+    }
+
+    if (handoffTimerRef.current) {
+      window.clearTimeout(handoffTimerRef.current);
+      handoffTimerRef.current = null;
+    }
+
     await stopLiveKitRoom();
-    isSummarizingRef.current = true;
 
     try {
       const latestConversation = conversationRef.current;
       const latestSpokenIntent = spokenInputRef.current.trim();
-      const latestFileName = fileNameRef.current;
       const summaryMessages =
         latestConversation.length > 0
           ? latestConversation
@@ -1118,19 +1278,12 @@ export function SpeechInputWorkbench() {
                 content: latestSpokenIntent || "The user asked Bron to start working.",
               },
             ];
-      const dataContextMessages = latestFileName.length > 0
-        ? [
-            {
-              role: "user" as const,
-              content: `Attached custom dataset file: ${latestFileName}. Use this as source data context.`,
-            },
-          ]
-        : [];
       const { summary } = await summarizeMutation.mutateAsync({
-        messages: [...summaryMessages, ...dataContextMessages],
+        messages: summaryMessages,
       });
 
       window.sessionStorage.setItem("f1-agent-conversation-summary", summary);
+      window.sessionStorage.removeItem(CONVERSATION_MESSAGES_STORAGE_KEY);
       router.push("/agents", {
         scroll: false,
         transitionTypes: ["nav-forward"],
@@ -1138,6 +1291,8 @@ export function SpeechInputWorkbench() {
     } catch (error) {
       showTemporaryResponse(error instanceof Error ? error.message : "Could not summarize conversation.");
       isSummarizingRef.current = false;
+      hasStartedRoutingRef.current = false;
+      setIsSummarizing(false);
     }
   }
 
@@ -1153,6 +1308,12 @@ export function SpeechInputWorkbench() {
           maskImage: "radial-gradient(circle at center, black 0%, black 54%, transparent 100%)",
         }}
       />
+      {isSummarizing ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-[6] bg-[#030303]/58 backdrop-blur-[1px] [mask-image:radial-gradient(circle_at_center,transparent_0%,transparent_28%,black_76%)]"
+        />
+      ) : null}
 
       <header className="relative z-20 flex h-20 items-center justify-between">
         <button
@@ -1165,11 +1326,11 @@ export function SpeechInputWorkbench() {
 
         <button
           type="button"
-          onClick={() => router.push("/agents")}
-          className="inline-flex h-10 items-center gap-2 rounded-md border border-white/12 bg-white/[0.035] px-4 text-sm font-medium text-white/76 transition hover:border-white/24 hover:bg-white/[0.065] hover:text-white"
+          onClick={() => void handleSignOut()}
+          className="inline-flex h-10 items-center gap-2 rounded-md border border-white/12 bg-white/[0.035] px-3.5 text-sm font-medium text-white/72 transition hover:border-white/24 hover:bg-white/[0.065] hover:text-white focus-visible:ring-3 focus-visible:ring-cyan-300/28"
         >
-          <LayoutDashboard className="size-4" strokeWidth={1.8} />
-          Dashboard
+          <LogOut className="size-4" strokeWidth={1.8} />
+          Sign out
         </button>
       </header>
 
@@ -1179,13 +1340,59 @@ export function SpeechInputWorkbench() {
             <VoiceSignalSquare
               active={isListening}
               connecting={isConnectingVoice}
+              contextAttached={hasDataInput}
+              contextBridgeActive={shouldShowDatasetUpload}
+              summarizing={isSummarizing}
               voiceLevel={micLevel}
               onToggle={startSpeechInput}
             />
 
+            <span
+              aria-hidden="true"
+              className={cn(
+                "pointer-events-none absolute left-1/2 top-[calc(50%+6.1rem)] z-[55] h-[6.35rem] w-28 -translate-x-1/2 transition-all duration-300 ease-out sm:top-[calc(50%+6.9rem)]",
+                shouldShowDatasetUpload
+                  ? "translate-y-0 opacity-100"
+                  : "pointer-events-none -translate-y-8 opacity-0",
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute left-1/2 top-0 h-[calc(100%-1.35rem)] w-px -translate-x-1/2",
+                  hasDataInput
+                    ? "bg-gradient-to-b from-[#f0d7a0]/52 via-[#c9aa72]/24 to-transparent"
+                    : "bg-gradient-to-b from-cyan-100/45 via-cyan-300/22 to-transparent",
+                )}
+              />
+              <span
+                className={cn(
+                  "absolute left-1/2 top-2 h-[4.75rem] w-[5.9rem] -translate-x-1/2 rounded-b-md border border-t-0 bg-[#040607]/88 shadow-[0_20px_44px_rgba(0,0,0,0.34),inset_0_-1px_0_rgba(255,255,255,0.045)]",
+                  hasDataInput
+                    ? "border-[#c9aa72]/24"
+                    : "border-cyan-200/16",
+                )}
+              />
+              <span
+                className={cn(
+                  "absolute left-1/2 top-[1.15rem] h-[3.75rem] w-[2.6rem] -translate-x-1/2 rounded-b-sm border-x",
+                  hasDataInput
+                    ? "border-[#c9aa72]/22"
+                    : "border-cyan-200/14",
+                )}
+              />
+              <span
+                className={cn(
+                  "absolute bottom-[1.35rem] left-1/2 h-px w-[4.35rem] -translate-x-1/2",
+                  hasDataInput
+                    ? "bg-gradient-to-r from-transparent via-[#f0d7a0]/42 to-transparent"
+                    : "bg-gradient-to-r from-transparent via-cyan-100/32 to-transparent",
+                )}
+              />
+            </span>
+
             <div
               className={cn(
-                "absolute left-1/2 top-[calc(50%+7.35rem)] z-0 -translate-x-1/2 transition-all duration-300 ease-out sm:top-[calc(50%+8.15rem)]",
+                "absolute left-1/2 top-[calc(50%+7.35rem)] z-[60] -translate-x-1/2 transition-all duration-300 ease-out sm:top-[calc(50%+8.15rem)]",
                 shouldShowDatasetUpload
                   ? "translate-y-0 opacity-100"
                   : "pointer-events-none -translate-y-12 opacity-0",
@@ -1196,10 +1403,10 @@ export function SpeechInputWorkbench() {
                   data-dataset-upload="true"
                   aria-label="Upload data"
                   className={cn(
-                    "grid size-12 shrink-0 cursor-pointer place-items-center rounded-md border border-cyan-300/55 bg-cyan-300/[0.13] text-cyan-50 shadow-[0_0_38px_rgba(34,211,238,0.24),inset_0_1px_0_rgba(255,255,255,0.14)] transition hover:border-cyan-200/75 hover:bg-cyan-300/[0.18] focus-within:ring-3 focus-within:ring-cyan-300/30",
+                    "grid size-12 shrink-0 cursor-pointer place-items-center rounded-md border border-cyan-200/42 bg-[#061014]/92 text-cyan-50 shadow-[0_12px_28px_rgba(0,0,0,0.38),0_0_24px_rgba(34,211,238,0.13),inset_0_1px_0_rgba(255,255,255,0.11)] transition duration-150 hover:-translate-y-0.5 hover:border-cyan-100/65 hover:bg-[#071820] hover:text-white hover:shadow-[0_14px_32px_rgba(0,0,0,0.42),0_0_28px_rgba(34,211,238,0.18),inset_0_1px_0_rgba(255,255,255,0.16)] active:translate-y-0 focus-within:ring-3 focus-within:ring-cyan-300/24",
                     hasDataInput
-                      ? "animate-none border-emerald-300/55 bg-emerald-300/[0.12] text-emerald-50 shadow-[0_0_38px_rgba(110,231,183,0.2),inset_0_1px_0_rgba(255,255,255,0.14)]"
-                      : "animate-pulse",
+                      ? "border-[#c9aa72]/58 bg-[#151107]/92 text-[#f3d9a4] shadow-[0_14px_30px_rgba(0,0,0,0.42),0_0_24px_rgba(201,170,114,0.11),inset_0_1px_0_rgba(255,255,255,0.13)] hover:border-[#f0d7a0]/72 hover:bg-[#1b1509] hover:shadow-[0_16px_34px_rgba(0,0,0,0.46),0_0_28px_rgba(201,170,114,0.15),inset_0_1px_0_rgba(255,255,255,0.16)]"
+                      : "",
                   )}
                 >
                   <Paperclip className="size-5" strokeWidth={1.8} />
