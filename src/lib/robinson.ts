@@ -3,32 +3,24 @@ type RobinsonPoint = {
   y: number;
 };
 
-const ROBINSON_HALF_HEIGHT = 91.296;
-const ROBINSON_VIEWBOX_LEFT = -180;
-const ROBINSON_VIEWBOX_RIGHT = 180;
-const ROBINSON_VIEWBOX_TOP = -ROBINSON_HALF_HEIGHT;
-const ROBINSON_VIEWBOX_BOTTOM = ROBINSON_HALF_HEIGHT;
-const ROBINSON_Y_BY_LAT = [
-  0, 0.062, 0.124, 0.186, 0.248, 0.31, 0.372, 0.434, 0.4958, 0.5571,
-  0.6176, 0.6769, 0.7346, 0.7903, 0.8435, 0.8936, 0.9394, 0.9761, 1,
-];
+export const ROBINSON_VIEWBOX = {
+  left: -180,
+  top: -91.296,
+  width: 360,
+  height: 182.592,
+} as const;
 
-function interpolate(table: number[], latitude: number) {
-  const absoluteLatitude = Math.min(Math.abs(latitude), 90);
-  const lowerIndex = Math.floor(absoluteLatitude / 5);
-  const upperIndex = Math.min(lowerIndex + 1, table.length - 1);
-  const fraction = (absoluteLatitude - lowerIndex * 5) / 5;
+export const ROBINSON_VIEWBOX_STRING = `${ROBINSON_VIEWBOX.left} ${ROBINSON_VIEWBOX.top} ${ROBINSON_VIEWBOX.width} ${ROBINSON_VIEWBOX.height}`;
+export const ROBINSON_ASPECT_RATIO = ROBINSON_VIEWBOX.width / ROBINSON_VIEWBOX.height;
 
-  return table[lowerIndex] + (table[upperIndex] - table[lowerIndex]) * fraction;
+export function viewBoxToPercent(viewBoxX: number, viewBoxY: number): RobinsonPoint {
+  return {
+    x: ((viewBoxX - ROBINSON_VIEWBOX.left) / ROBINSON_VIEWBOX.width) * 100,
+    y: ((viewBoxY - ROBINSON_VIEWBOX.top) / ROBINSON_VIEWBOX.height) * 100,
+  };
 }
 
-export function projectRobinson(latitude: number, longitude: number): RobinsonPoint {
-  const yScale = interpolate(ROBINSON_Y_BY_LAT, latitude);
-  const x = longitude;
-  const y = -Math.sign(latitude) * ROBINSON_HALF_HEIGHT * yScale;
-
-  return {
-    x: ((x - ROBINSON_VIEWBOX_LEFT) / (ROBINSON_VIEWBOX_RIGHT - ROBINSON_VIEWBOX_LEFT)) * 100,
-    y: ((y - ROBINSON_VIEWBOX_TOP) / (ROBINSON_VIEWBOX_BOTTOM - ROBINSON_VIEWBOX_TOP)) * 100,
-  };
+/** Calibrated against public/world-map-robinson.svg (Natural Earth Robinson). */
+export function mapViewBoxToPercent(viewBoxX: number, viewBoxY: number): RobinsonPoint {
+  return viewBoxToPercent(viewBoxX, viewBoxY);
 }
