@@ -1,7 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AutoSubscribe, cli, defineAgent, inference, llm, ServerOptions, voice } from "@livekit/agents";
+import voiceAgentDefaults from "../voice-agent.defaults.json" with { type: "json" };
+import {
+  AutoSubscribe,
+  cli,
+  defineAgent,
+  inference,
+  llm,
+  ServerOptions,
+  voice,
+} from "@livekit/agents";
 import { LLM as OpenAILLM } from "@livekit/agents-plugin-openai";
 import { z } from "zod";
 
@@ -72,25 +81,92 @@ const livekitUrl = requiredEnv("LIVEKIT_URL");
 const livekitApiKey = requiredEnv("LIVEKIT_API_KEY");
 const livekitApiSecret = requiredEnv("LIVEKIT_API_SECRET");
 const digitalOceanApiKey = requiredEnv("DIGITALOCEAN_MODEL_API_KEY");
-const digitalOceanBaseUrl = process.env.DIGITALOCEAN_MODEL_BASE_URL ?? "https://inference.do-ai.run/v1";
+const digitalOceanBaseUrl =
+  process.env.DIGITALOCEAN_MODEL_BASE_URL ?? "https://inference.do-ai.run/v1";
 const chatModel = process.env.DIGITALOCEAN_CHAT_MODEL ?? "qwen3-coder-flash";
-const sttModel = process.env.LIVEKIT_AGENT_STT_MODEL ?? "deepgram/flux-general-en";
+const sttModel =
+  process.env.LIVEKIT_AGENT_STT_MODEL ?? "deepgram/flux-general-en";
 const ttsModel = process.env.LIVEKIT_AGENT_TTS_MODEL ?? "cartesia/sonic-3.5";
-const ttsVoice = process.env.LIVEKIT_AGENT_TTS_VOICE || "a5136bf9-224c-4d76-b823-52bd5efcffcc";
-const agentName = process.env.LIVEKIT_AGENT_NAME || process.env.LIVEKIT_AGENT_ID || "f1-voice-agent";
+const ttsVoice =
+  process.env.LIVEKIT_AGENT_TTS_VOICE || "a5136bf9-224c-4d76-b823-52bd5efcffcc";
+const agentName =
+  process.env.LIVEKIT_AGENT_NAME ||
+  process.env.LIVEKIT_AGENT_ID ||
+  "f1-voice-agent";
 const agentId = process.env.LIVEKIT_AGENT_ID || agentName;
 const CUSTOM_DATASET_UPLOAD_TOPIC = "lebronsseiur.custom_dataset_upload";
 const START_AGENT_WORK_TOPIC = "lebronsseiur.start_agent_work";
-const START_AGENT_WORK_PHRASE = "Ok, redirecting you to Coach Bron. Stand by for context switch.";
+const VOICE_DEBUG_TOPIC = "lebronsseiur.voice_debug";
+const START_AGENT_WORK_PHRASE =
+  "Ok, redirecting you to Coach Bron. Stand by for context switch.";
+const turnDetectionMode = process.env.LIVEKIT_AGENT_TURN_DETECTION || "stt";
+const vadConfig = {
+  minSpeechDurationMs: boundedNumberEnv(
+    "LIVEKIT_AGENT_VAD_MIN_SPEECH_MS",
+    voiceAgentDefaults.vad.minSpeechDurationMs,
+    20,
+    500,
+  ),
+  minSilenceDurationMs: boundedNumberEnv(
+    "LIVEKIT_AGENT_VAD_MIN_SILENCE_MS",
+    voiceAgentDefaults.vad.minSilenceDurationMs,
+    40,
+    200,
+  ),
+  activationThreshold: boundedNumberEnv(
+    "LIVEKIT_AGENT_VAD_ACTIVATION_THRESHOLD",
+    voiceAgentDefaults.vad.activationThreshold,
+    0.1,
+    0.8,
+  ),
+};
+const eotTimeoutMs = boundedNumberEnv(
+  "LIVEKIT_AGENT_EOT_TIMEOUT_MS",
+  voiceAgentDefaults.eotTimeoutMs,
+  500,
+  60000,
+);
+const endpointConfig = {
+  minDelayMs: boundedNumberEnv(
+    "LIVEKIT_AGENT_ENDPOINT_MIN_DELAY_MS",
+    voiceAgentDefaults.endpoint.minDelayMs,
+    20,
+    1000,
+  ),
+  maxDelayMs: boundedNumberEnv(
+    "LIVEKIT_AGENT_ENDPOINT_MAX_DELAY_MS",
+    voiceAgentDefaults.endpoint.maxDelayMs,
+    80,
+    5000,
+  ),
+};
+
+function logVoiceEvent(event, payload = {}) {
+  console.info(`[voice-agent] ${event}`, payload);
+}
 
 export default defineAgent({
   entry: async (ctx) => {
+    function sendVoiceDebugEvent(event, payload = {}) {
+      void ctx.room.localParticipant
+        ?.sendText(
+          JSON.stringify({
+            type: "voice_debug",
+            event,
+            payload,
+            timestamp: Date.now(),
+          }),
+          { topic: VOICE_DEBUG_TOPIC },
+        )
+        .catch(() => undefined);
+    }
+
     const session = new voice.AgentSession({
       vad: new inference.VAD({
         model: "silero",
-        minSpeechDuration: boundedNumberEnv("LIVEKIT_AGENT_VAD_MIN_SPEECH_MS", 45, 20, 500),
-        minSilenceDuration: boundedNumberEnv("LIVEKIT_AGENT_VAD_MIN_SILENCE_MS", 95, 60, 600),
-        activationThreshold: boundedNumberEnv("LIVEKIT_AGENT_VAD_ACTIVATION_THRESHOLD", 0.55, 0.2, 0.8),
+        minSpeechDuration: vadConfig.minSpeechDurationMs,
+        minSilenceDuration: vadConfig.minSilenceDurationMs,
+        activationThreshold: vadConfig.activationThreshold,
       }),
       stt: new inference.STT({
         model: sttModel,
@@ -98,8 +174,13 @@ export default defineAgent({
         apiKey: livekitApiKey,
         apiSecret: livekitApiSecret,
         modelOptions: {
-          eager_eot_threshold: boundedNumberEnv("LIVEKIT_AGENT_EAGER_EOT_THRESHOLD", 0.3, 0.1, 0.9),
-          eot_timeout_ms: boundedNumberEnv("LIVEKIT_AGENT_EOT_TIMEOUT_MS", 260, 180, 60000),
+          eager_eot_threshold: boundedNumberEnv(
+            "LIVEKIT_AGENT_EAGER_EOT_THRESHOLD",
+            0.3,
+            0.1,
+            0.9,
+          ),
+          eot_timeout_ms: eotTimeoutMs,
           language_hint: "en",
         },
       }),
@@ -108,7 +189,10 @@ export default defineAgent({
         baseURL: digitalOceanBaseUrl,
         model: chatModel,
         temperature: 0.35,
-        maxCompletionTokens: optionalNumberEnv("LIVEKIT_AGENT_MAX_COMPLETION_TOKENS", 80),
+        maxCompletionTokens: optionalNumberEnv(
+          "LIVEKIT_AGENT_MAX_COMPLETION_TOKENS",
+          80,
+        ),
       }),
       tts: new inference.TTS({
         model: ttsModel,
@@ -117,12 +201,17 @@ export default defineAgent({
         apiSecret: livekitApiSecret,
         modelOptions: {
           speed: process.env.LIVEKIT_AGENT_TTS_SPEED || "normal",
-          max_buffer_delay_ms: boundedNumberEnv("LIVEKIT_AGENT_TTS_MAX_BUFFER_DELAY_MS", 20, 0, 1000),
+          max_buffer_delay_ms: boundedNumberEnv(
+            "LIVEKIT_AGENT_TTS_MAX_BUFFER_DELAY_MS",
+            20,
+            0,
+            1000,
+          ),
         },
       }),
       aecWarmupDuration: null,
       turnHandling: {
-        turnDetection: "vad",
+        turnDetection: turnDetectionMode,
         preemptiveGeneration: {
           enabled: true,
           preemptiveTts: true,
@@ -133,21 +222,94 @@ export default defineAgent({
           enabled: false,
         },
         endpointing: {
-          minDelay: boundedNumberEnv("LIVEKIT_AGENT_ENDPOINT_MIN_DELAY_MS", 35, 20, 1000),
-          maxDelay: boundedNumberEnv("LIVEKIT_AGENT_ENDPOINT_MAX_DELAY_MS", 160, 80, 5000),
+          minDelay: endpointConfig.minDelayMs,
+          maxDelay: endpointConfig.maxDelayMs,
         },
       },
       ttsTextTransforms: ["filter_markdown", "filter_emoji"],
     });
 
+    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (event) => {
+      const payload = {
+        final: event.isFinal,
+        length: event.transcript.length,
+        transcript: event.transcript.slice(0, 160),
+      };
+
+      logVoiceEvent("user_input_transcribed", payload);
+      sendVoiceDebugEvent("user_input_transcribed", payload);
+    });
+    session.on(voice.AgentSessionEventTypes.UserStateChanged, (event) => {
+      const payload = {
+        from: event.oldState,
+        to: event.newState,
+      };
+
+      logVoiceEvent("user_state_changed", payload);
+      sendVoiceDebugEvent("user_state_changed", payload);
+    });
+    session.on(voice.AgentSessionEventTypes.AgentStateChanged, (event) => {
+      const payload = {
+        from: event.oldState,
+        to: event.newState,
+      };
+
+      logVoiceEvent("agent_state_changed", payload);
+      sendVoiceDebugEvent("agent_state_changed", payload);
+    });
+    session.on(voice.AgentSessionEventTypes.SpeechCreated, (event) => {
+      const payload = {
+        source: event.source,
+        userInitiated: event.userInitiated,
+      };
+
+      logVoiceEvent("speech_created", payload);
+      sendVoiceDebugEvent("speech_created", payload);
+    });
+    session.on(voice.AgentSessionEventTypes.FunctionToolsExecuted, (event) => {
+      const payload = {
+        tools: event.functionCalls.map((call) => call.name),
+      };
+
+      logVoiceEvent("function_tools_executed", payload);
+      sendVoiceDebugEvent("function_tools_executed", payload);
+    });
+    session.on(voice.AgentSessionEventTypes.MetricsCollected, (event) => {
+      const payload = {
+        type: event.metrics.type,
+        label: event.metrics.label,
+        requestId: event.metrics.requestId,
+      };
+
+      logVoiceEvent("metrics_collected", payload);
+      sendVoiceDebugEvent("metrics_collected", payload);
+    });
+    session.on(voice.AgentSessionEventTypes.Error, (event) => {
+      const payload = {
+        error:
+          event.error instanceof Error
+            ? event.error.message
+            : String(event.error),
+        source: event.source?.constructor?.name,
+      };
+
+      logVoiceEvent("session_error", payload);
+      sendVoiceDebugEvent("session_error", payload);
+    });
+
     const agent = new voice.Agent({
       id: agentId,
-      instructions:
-        `You are Bron, a fast voice agent for a problem-solving app. Speak in short, confident sentences under 18 words unless asked for detail. Ask one clear follow-up when the user is vague. Do not mention implementation details unless asked. If the user mentions having, needing, uploading, attaching, importing, or using a custom dataset or their own data file, decide that they need the custom dataset upload control. Call show_custom_dataset_upload, then say exactly: "Oh, I'll pull up the addition button below. Just press it and add your custom dataset in any format." Keep the voice conversation going after saying that. When the user clearly says they are done explaining, asks you to get to work, start, run it, build it, solve it, or proceed, call start_agent_work, then say exactly: "${START_AGENT_WORK_PHRASE}" Do not call start_agent_work while you still need a critical clarification.`,
+      instructions: `You are Bron, a fast voice agent for a problem-solving app. Speak in short, confident sentences under 18 words unless asked for detail. Ask one clear follow-up when the user is vague. Do not mention implementation details unless asked.
+
+Tool rules:
+- If the user asks to upload, attach, select, choose, add, import, load, provide, or send any file, document, PDF, DOC, DOCX, spreadsheet, CSV, JSON, dataset, source data, custom dataset, their own data file, file selector, file picker, paperclip, upload button, attachment button, addition button, or additional file, call show_custom_dataset_upload before saying anything else. After the tool call, say exactly: "Oh, I'll pull up the addition button below. Just press it and add your custom dataset in any format."
+- Upload/file/document requests are not handoff requests. If a turn asks for upload/file/document controls, call only show_custom_dataset_upload and do not call start_agent_work in that same turn.
+- If the user clearly says they are done explaining, asks you to get to work, start working, run it, build it, solve it, proceed, go ahead, move on, quit voice, switch to Coach Bron, or go to the next step, and they are not asking to upload/select/add a file or document, call start_agent_work before saying anything else. After the tool call, say exactly: "${START_AGENT_WORK_PHRASE}"
+- Never say an upload control or next step is happening unless the matching tool was called. Do not call start_agent_work while you still need a critical clarification.`,
       tools: {
         show_custom_dataset_upload: llm.tool({
           description:
-            "Show the custom dataset upload button when the user mentions a custom dataset, their own data, source data, spreadsheet, CSV, JSON, Excel file, or attaching/uploading data.",
+            "Show the custom dataset upload control when the user asks to upload, attach, select, choose, add, import, load, provide, or send a file, document, PDF, DOC, DOCX, custom dataset, their own data, source data, spreadsheet, CSV, JSON, Excel file, file selector, file picker, paperclip, attachment button, upload button, addition button, or additional file.",
           parameters: z.object({
             reason: z.string().optional(),
           }),
@@ -156,13 +318,17 @@ export default defineAgent({
               JSON.stringify({ type: "show_custom_dataset_upload" }),
               { topic: CUSTOM_DATASET_UPLOAD_TOPIC },
             );
+            const payload = { topic: CUSTOM_DATASET_UPLOAD_TOPIC };
+
+            logVoiceEvent("tool_sent_show_custom_dataset_upload", payload);
+            sendVoiceDebugEvent("tool_sent_show_custom_dataset_upload", payload);
 
             return "The custom dataset upload button is visible below the voice control.";
           },
         }),
         start_agent_work: llm.tool({
           description:
-            "Use when the user is done explaining and wants the app to stop the voice conversation, summarize the request, and move to the agent work graph.",
+            "Use when the user is done explaining and wants the app to stop the voice conversation, summarize the request, move to the agent work graph, proceed, go ahead, move on, quit voice, switch to Coach Bron, or go to the next step. Do not use for upload, file, or document selection requests.",
           parameters: z.object({
             reason: z.string().optional(),
           }),
@@ -171,12 +337,32 @@ export default defineAgent({
               JSON.stringify({ type: "start_agent_work" }),
               { topic: START_AGENT_WORK_TOPIC },
             );
+            const payload = { topic: START_AGENT_WORK_TOPIC };
+
+            logVoiceEvent("tool_sent_start_agent_work", payload);
+            sendVoiceDebugEvent("tool_sent_start_agent_work", payload);
 
             return START_AGENT_WORK_PHRASE;
           },
         }),
       },
     });
+
+    await ctx.connect(undefined, AutoSubscribe.AUDIO_ONLY);
+    const roomConnectedPayload = {
+      room: ctx.room.name,
+      agentName,
+      chatModel,
+      sttModel,
+      ttsModel,
+      turnDetectionMode,
+      vadConfig,
+      eotTimeoutMs,
+      endpointConfig,
+    };
+
+    logVoiceEvent("room_connected", roomConnectedPayload);
+    sendVoiceDebugEvent("room_connected", roomConnectedPayload);
 
     await session.start({
       agent,
@@ -185,8 +371,6 @@ export default defineAgent({
         syncTranscription: false,
       },
     });
-
-    await ctx.connect(undefined, AutoSubscribe.AUDIO_ONLY);
 
     // Do not speak on join. The first audio should be a direct response to the user.
   },

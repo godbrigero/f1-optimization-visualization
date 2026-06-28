@@ -11,6 +11,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { LogOut, Paperclip } from "lucide-react";
+import voiceAgentDefaults from "../../voice-agent.defaults.json";
 import {
   createAudioAnalyser,
   Room,
@@ -34,9 +35,18 @@ const TRANSCRIPTION_TOPIC = "lk.transcription";
 const TRANSCRIPTION_FINAL_ATTRIBUTE = "lk.transcription_final";
 const CUSTOM_DATASET_UPLOAD_TOPIC = "lebronsseiur.custom_dataset_upload";
 const START_AGENT_WORK_TOPIC = "lebronsseiur.start_agent_work";
+const VOICE_DEBUG_TOPIC = "lebronsseiur.voice_debug";
 const VOICE_ROOM_PREFIX = "lebronsseiur-model-conversation";
 const CONVERSATION_MESSAGES_STORAGE_KEY = "f1-agent-conversation-messages";
 const START_AGENT_WORK_HANDOFF_DELAY_MS = 4200;
+const DEFAULT_VOICE_DEBUG_CONFIG = {
+  activationThreshold: voiceAgentDefaults.vad.activationThreshold,
+  eotTimeoutMs: voiceAgentDefaults.eotTimeoutMs,
+  endpointMaxDelayMs: voiceAgentDefaults.endpoint.maxDelayMs,
+  endpointMinDelayMs: voiceAgentDefaults.endpoint.minDelayMs,
+  minSilenceDurationMs: voiceAgentDefaults.vad.minSilenceDurationMs,
+  minSpeechDurationMs: voiceAgentDefaults.vad.minSpeechDurationMs,
+};
 const ROUNDED_TRIANGLE_CLIP_PATH =
   "polygon(50% 1.5%, 53.5% 3.5%, 98% 88%, 96.5% 92%, 91% 94%, 9% 94%, 3.5% 92%, 2% 88%, 46.5% 3.5%)";
 const ROUNDED_TRIANGLE_PATH =
@@ -50,6 +60,25 @@ const CROWN_INNER_PATH =
 type ConversationMessage = {
   role: "user" | "assistant";
   content: string;
+};
+
+type VoiceDebugConfig = typeof DEFAULT_VOICE_DEBUG_CONFIG;
+
+type VoiceDebugTone = "neutral" | "good" | "warn" | "error";
+
+type VoiceDebugEntry = {
+  detail: string;
+  event: string;
+  id: number;
+  time: number;
+  tone: VoiceDebugTone;
+};
+
+type VoiceDebugMessage = {
+  event?: string;
+  payload?: Record<string, unknown>;
+  timestamp?: number;
+  type?: string;
 };
 
 function createIdentity() {
@@ -117,6 +146,159 @@ function storeConversationMessages(messages: ConversationMessage[]) {
   );
 }
 
+function formatDebugTime(time: number) {
+  return new Date(time).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatDebugMs(milliseconds: number) {
+  if (milliseconds < 1000) {
+    return `${Math.round(milliseconds)}ms`;
+  }
+
+  return `${(milliseconds / 1000).toFixed(1)}s`;
+}
+
+function getDebugProgress(value: number, target: number) {
+  if (target <= 0) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(100, (value / target) * 100));
+}
+
+function getDebugPayloadString(
+  payload: Record<string, unknown> | undefined,
+  key: string,
+) {
+  const value = payload?.[key];
+
+  return typeof value === "string" ? value : "";
+}
+
+function getDebugPayloadNumber(
+  payload: Record<string, unknown> | undefined,
+  key: string,
+) {
+  const value = payload?.[key];
+
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function getVoiceDebugConfigFromPayload(
+  payload: Record<string, unknown> | undefined,
+) {
+  const vadConfig =
+    payload?.vadConfig && typeof payload.vadConfig === "object"
+      ? (payload.vadConfig as Record<string, unknown>)
+      : undefined;
+  const endpointConfig =
+    payload?.endpointConfig && typeof payload.endpointConfig === "object"
+      ? (payload.endpointConfig as Record<string, unknown>)
+      : undefined;
+  const activationThreshold = getDebugPayloadNumber(
+    vadConfig,
+    "activationThreshold",
+  );
+  const minSpeechDurationMs = getDebugPayloadNumber(
+    vadConfig,
+    "minSpeechDurationMs",
+  );
+  const minSilenceDurationMs = getDebugPayloadNumber(
+    vadConfig,
+    "minSilenceDurationMs",
+  );
+  const eotTimeoutMs = getDebugPayloadNumber(payload, "eotTimeoutMs");
+  const endpointMinDelayMs = getDebugPayloadNumber(endpointConfig, "minDelayMs");
+  const endpointMaxDelayMs = getDebugPayloadNumber(endpointConfig, "maxDelayMs");
+
+  return {
+    activationThreshold:
+      activationThreshold ?? DEFAULT_VOICE_DEBUG_CONFIG.activationThreshold,
+    eotTimeoutMs: eotTimeoutMs ?? DEFAULT_VOICE_DEBUG_CONFIG.eotTimeoutMs,
+    endpointMaxDelayMs:
+      endpointMaxDelayMs ?? DEFAULT_VOICE_DEBUG_CONFIG.endpointMaxDelayMs,
+    endpointMinDelayMs:
+      endpointMinDelayMs ?? DEFAULT_VOICE_DEBUG_CONFIG.endpointMinDelayMs,
+    minSilenceDurationMs:
+      minSilenceDurationMs ??
+      DEFAULT_VOICE_DEBUG_CONFIG.minSilenceDurationMs,
+    minSpeechDurationMs:
+      minSpeechDurationMs ?? DEFAULT_VOICE_DEBUG_CONFIG.minSpeechDurationMs,
+  };
+}
+
+function describeVoiceDebugEvent(
+  event: string,
+  payload?: Record<string, unknown>,
+) {
+  if (event === "user_input_transcribed") {
+    const transcript = getDebugPayloadString(payload, "transcript");
+    const isFinal = payload?.final === true;
+
+    return `${isFinal ? "final" : "partial"}: ${transcript || "(empty)"}`;
+  }
+
+  if (event === "user_state_changed" || event === "agent_state_changed") {
+    return `${getDebugPayloadString(payload, "from") || "unknown"} -> ${
+      getDebugPayloadString(payload, "to") || "unknown"
+    }`;
+  }
+
+  if (event === "metrics_collected") {
+    return getDebugPayloadString(payload, "type") || "metrics";
+  }
+
+  if (event === "speech_created") {
+    return getDebugPayloadString(payload, "source") || "reply queued";
+  }
+
+  if (event === "function_tools_executed") {
+    const tools = payload?.tools;
+
+    return Array.isArray(tools) ? tools.join(", ") : "tool call";
+  }
+
+  if (event.startsWith("tool_sent_")) {
+    return getDebugPayloadString(payload, "topic") || "tool message sent";
+  }
+
+  if (event === "session_error") {
+    return getDebugPayloadString(payload, "error") || "session error";
+  }
+
+  if (event === "room_connected") {
+    return `${getDebugPayloadString(payload, "agentName") || "agent"} joined`;
+  }
+
+  return event.replaceAll("_", " ");
+}
+
+function getDebugTone(event: string): VoiceDebugTone {
+  if (event.includes("error") || event.includes("failed")) {
+    return "error";
+  }
+
+  if (
+    event === "user_state_changed" ||
+    event === "agent_state_changed" ||
+    event === "function_tools_executed" ||
+    event.startsWith("tool_sent_") ||
+    event.startsWith("client_")
+  ) {
+    return "good";
+  }
+
+  if (event === "metrics_collected") {
+    return "neutral";
+  }
+
+  return "warn";
+}
+
 function mentionsCustomDataset(text: string) {
   const normalizedText = text
     .toLowerCase()
@@ -128,11 +310,29 @@ function mentionsCustomDataset(text: string) {
     return false;
   }
 
-  const explicitCustomData =
-    /\b(custom|my|our|own|uploaded|attached|local|external)\s+(data|dataset|file|spreadsheet|csv|excel|json|tsv)\b/.test(
+  const mentionsFileSelector =
+    /\b(file|document|doc|docx|pdf|data|dataset|upload|attach|attachment|paperclip|addition)\s+(selector|picker|button|control|option)\b/.test(
       normalizedText,
     ) ||
-    /\b(data|dataset|file|spreadsheet|csv|excel|json|tsv)\s+(of\s+my\s+own|from\s+me|from\s+my\s+side)\b/.test(
+    /\b(pull|bring|show|open|pop|display)\s+(up\s+)?(the\s+)?(file|document|doc|docx|pdf|upload|attach|attachment|paperclip|addition)\b/.test(
+      normalizedText,
+    ) ||
+    /\b(additional|another|extra)\s+(file|document|doc|docx|pdf|upload|attachment|dataset|data)\b/.test(
+      normalizedText,
+    ) ||
+    /\b(upload|attach|select|choose|pick|add|import|load|provide|send)\s+(a\s+|an\s+|the\s+|my\s+|our\s+|own\s+)?(file|document|doc|docx|pdf)\b/.test(
+      normalizedText,
+    );
+
+  if (mentionsFileSelector) {
+    return true;
+  }
+
+  const explicitCustomData =
+    /\b(custom|my|our|own|uploaded|attached|local|external)\s+(data|dataset|file|document|doc|docx|pdf|spreadsheet|csv|excel|json|tsv)\b/.test(
+      normalizedText,
+    ) ||
+    /\b(data|dataset|file|document|doc|docx|pdf|spreadsheet|csv|excel|json|tsv)\s+(of\s+my\s+own|from\s+me|from\s+my\s+side)\b/.test(
       normalizedText,
     );
 
@@ -141,7 +341,7 @@ function mentionsCustomDataset(text: string) {
   }
 
   const mentionsDataArtifact =
-    /\b(dataset|data file|source data|spreadsheet|csv|xlsx|xls|excel|json|tsv)\b/.test(
+    /\b(dataset|data file|source data|file|document|doc|docx|pdf|spreadsheet|csv|xlsx|xls|excel|json|tsv)\b/.test(
       normalizedText,
     );
   const mentionsAttachAction =
@@ -150,6 +350,27 @@ function mentionsCustomDataset(text: string) {
     );
 
   return mentionsDataArtifact && mentionsAttachAction;
+}
+
+function mentionsStartAgentWork(text: string) {
+  const normalizedText = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (normalizedText.length === 0) {
+    return false;
+  }
+
+  return (
+    /\b(done|finished|that is all|thats all|that s all|ready)\b.*\b(start|work|go|proceed|continue|next|handoff|switch)\b/.test(
+      normalizedText,
+    ) ||
+    /\b(get to work|start working|start the work|begin working|run it|build it|solve it|proceed|go ahead|next step|move on|continue to agents|switch to coach bron|quit voice|exit voice)\b/.test(
+      normalizedText,
+    )
+  );
 }
 
 const voiceGridSize = 11;
@@ -458,16 +679,22 @@ function TriangleFrame() {
   );
 }
 
-function CrownFrame() {
+function CrownFrame({ liftLevel }: { liftLevel: number }) {
+  const crownLift = Math.max(0, Math.min(1, liftLevel));
+
   return (
     <svg
       aria-hidden="true"
-      className="pointer-events-none absolute left-[46.5%] top-[-40%] z-[24] h-[82%] w-[82%] overflow-visible opacity-100"
+      className="lk-crown-frame pointer-events-none absolute left-[46.5%] top-[-40%] z-[24] h-[82%] w-[82%] overflow-visible"
       viewBox="0 0 100 100"
-      style={{
-        transform: "translateX(-50%) rotate(-14deg)",
-        transformOrigin: "50% 68%",
-      }}
+      style={
+        {
+          "--lk-crown-lift": crownLift,
+          transform: `translateX(-50%) translateY(${-crownLift * 14}%) rotate(${
+            -14 + crownLift * 12
+          }deg) scale(${1 + crownLift * 0.045})`,
+        } as CSSProperties
+      }
     >
       <path
         className="lk-crown-fill"
@@ -524,6 +751,8 @@ function VoiceSignalSquare({
   const center = (voiceGridSize - 1) / 2;
   const combinedVoiceLevel = Math.max(voiceLevel, bronVoiceLevel);
   const bronPulse = active && bronVoiceLevel > 0.025 ? bronVoiceLevel : 0;
+  const crownLiftLevel =
+    active && !connecting ? Math.max(voiceLevel * 0.72, bronPulse) : 0;
   const activeRadius = 1.1 + combinedVoiceLevel * 5.4;
   const haloRadius = activeRadius + 1.8;
   const scanTrail = useMemo(() => {
@@ -742,7 +971,7 @@ function VoiceSignalSquare({
         >
           <TriangleSurface />
           <TriangleFrame />
-          <CrownFrame />
+          <CrownFrame liftLevel={crownLiftLevel} />
           {summarizing ? (
             <svg
               aria-hidden="true"
@@ -939,6 +1168,190 @@ function VoiceSignalSquare({
   );
 }
 
+function VoiceDebugPanel({
+  agentState,
+  bronVoiceLevel,
+  config,
+  entries,
+  isConnected,
+  isConnecting,
+  lastTranscript,
+  localGateActive,
+  localSilenceMs,
+  localSpeechMs,
+  micLevel,
+  userState,
+}: {
+  agentState: string;
+  bronVoiceLevel: number;
+  config: VoiceDebugConfig;
+  entries: VoiceDebugEntry[];
+  isConnected: boolean;
+  isConnecting: boolean;
+  lastTranscript: string;
+  localGateActive: boolean;
+  localSilenceMs: number;
+  localSpeechMs: number;
+  micLevel: number;
+  userState: string;
+}) {
+  const micPercent = Math.round(micLevel * 100);
+  const bronPercent = Math.round(bronVoiceLevel * 100);
+  const thresholdPercent = Math.round(config.activationThreshold * 100);
+  const speechProgress = getDebugProgress(
+    localSpeechMs,
+    config.minSpeechDurationMs,
+  );
+  const silenceProgress = getDebugProgress(
+    localSilenceMs,
+    config.minSilenceDurationMs,
+  );
+
+  return (
+    <aside className="fixed bottom-4 left-4 z-[80] w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-cyan-200/14 bg-[#030607]/88 text-white shadow-[0_24px_70px_rgba(0,0,0,0.52),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-md">
+      <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
+        <div>
+          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-cyan-100/72">
+            Voice timing
+          </p>
+          <p className="mt-0.5 text-[0.68rem] text-white/42">
+            {isConnected
+              ? isConnecting
+                ? "joining"
+                : "live"
+              : "standby"}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5 text-right text-[0.66rem] text-white/46">
+          <span>speech {config.minSpeechDurationMs}ms</span>
+          <span>silence {config.minSilenceDurationMs}ms</span>
+          <span>act {config.activationThreshold.toFixed(2)}</span>
+          <span>eot {config.eotTimeoutMs}ms</span>
+        </div>
+      </div>
+
+      <div className="grid gap-2 px-3 py-3">
+        <div className="grid grid-cols-[4.6rem_1fr_2.8rem] items-center gap-2 text-[0.68rem]">
+          <span className="text-white/48">mic</span>
+          <span className="relative h-2 overflow-hidden rounded-[2px] bg-white/[0.055]">
+            <span
+              className={cn(
+                "absolute inset-y-0 left-0 rounded-[2px]",
+                localGateActive ? "bg-cyan-200" : "bg-cyan-300/44",
+              )}
+              style={{ width: `${micPercent}%` }}
+            />
+            <span
+              className="absolute inset-y-[-3px] w-px bg-[#f0d7a0]"
+              style={{ left: `${Math.min(100, thresholdPercent)}%` }}
+            />
+          </span>
+          <span className="text-right tabular-nums text-white/58">
+            {micPercent}%
+          </span>
+        </div>
+
+        <div className="grid grid-cols-[4.6rem_1fr_2.8rem] items-center gap-2 text-[0.68rem]">
+          <span className="text-white/48">Bron</span>
+          <span className="h-2 overflow-hidden rounded-[2px] bg-white/[0.055]">
+            <span
+              className="block h-full rounded-[2px] bg-[#c9aa72]/72"
+              style={{ width: `${bronPercent}%` }}
+            />
+          </span>
+          <span className="text-right tabular-nums text-white/58">
+            {bronPercent}%
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-[4px] border border-white/8 bg-white/[0.035] p-2">
+            <div className="flex items-center justify-between text-[0.66rem] text-white/44">
+              <span>speech hold</span>
+              <span className="tabular-nums">
+                {formatDebugMs(localSpeechMs)}
+              </span>
+            </div>
+            <span className="mt-1.5 block h-1.5 overflow-hidden rounded-[2px] bg-white/[0.06]">
+              <span
+                className="block h-full rounded-[2px] bg-cyan-200/78"
+                style={{ width: `${speechProgress}%` }}
+              />
+            </span>
+          </div>
+          <div className="rounded-[4px] border border-white/8 bg-white/[0.035] p-2">
+            <div className="flex items-center justify-between text-[0.66rem] text-white/44">
+              <span>silence hold</span>
+              <span className="tabular-nums">
+                {formatDebugMs(localSilenceMs)}
+              </span>
+            </div>
+            <span className="mt-1.5 block h-1.5 overflow-hidden rounded-[2px] bg-white/[0.06]">
+              <span
+                className="block h-full rounded-[2px] bg-[#f0d7a0]/72"
+                style={{ width: `${silenceProgress}%` }}
+              />
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 text-[0.68rem]">
+          <div className="rounded-[4px] border border-cyan-200/12 bg-cyan-200/[0.035] px-2 py-1.5">
+            <span className="block text-white/40">user state</span>
+            <span className="mt-0.5 block font-medium text-cyan-50/86">
+              {userState}
+            </span>
+          </div>
+          <div className="rounded-[4px] border border-[#c9aa72]/16 bg-[#c9aa72]/[0.04] px-2 py-1.5">
+            <span className="block text-white/40">agent state</span>
+            <span className="mt-0.5 block font-medium text-[#f0d7a0]/88">
+              {agentState}
+            </span>
+          </div>
+        </div>
+
+        <div className="min-h-6 rounded-[4px] border border-white/8 bg-black/22 px-2 py-1.5 text-[0.68rem] text-white/58">
+          {lastTranscript || "No transcript yet."}
+        </div>
+
+        <div className="grid max-h-36 gap-1 overflow-hidden">
+          {entries.length === 0 ? (
+            <p className="text-[0.67rem] text-white/34">
+              Waiting for voice events.
+            </p>
+          ) : (
+            entries.map((entry) => (
+              <div
+                key={entry.id}
+                className="grid grid-cols-[4.4rem_5.9rem_1fr] gap-1.5 text-[0.64rem] leading-4"
+              >
+                <span className="tabular-nums text-white/30">
+                  {formatDebugTime(entry.time)}
+                </span>
+                <span
+                  className={cn(
+                    "truncate font-medium",
+                    entry.tone === "error"
+                      ? "text-red-300"
+                      : entry.tone === "good"
+                        ? "text-cyan-100"
+                        : entry.tone === "warn"
+                          ? "text-[#f0d7a0]"
+                          : "text-white/48",
+                  )}
+                >
+                  {entry.event.replaceAll("_", " ")}
+                </span>
+                <span className="truncate text-white/42">{entry.detail}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
 export function SpeechInputWorkbench() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -953,6 +1366,11 @@ export function SpeechInputWorkbench() {
   const bronAnalyserFrameRef = useRef<number | null>(null);
   const bronAudioTrackIdRef = useRef<string | null>(null);
   const bronVoiceLevelRef = useRef(0);
+  const debugEntryIdRef = useRef(0);
+  const estimatedNoiseFloorRef = useRef(0.012);
+  const lastMicDebugUpdateRef = useRef(0);
+  const localSilenceStartedAtRef = useRef<number | null>(null);
+  const localSpeechStartedAtRef = useRef<number | null>(null);
   const remoteAudioElementsRef = useRef<HTMLMediaElement[]>([]);
   const attachedAudioTrackIdsRef = useRef<Set<string>>(new Set());
   const conversationRef = useRef<ConversationMessage[]>(
@@ -961,6 +1379,9 @@ export function SpeechInputWorkbench() {
   const spokenInputRef = useRef("");
   const isSummarizingRef = useRef(false);
   const hasStartedRoutingRef = useRef(false);
+  const voiceDebugConfigRef = useRef<VoiceDebugConfig>(
+    DEFAULT_VOICE_DEBUG_CONFIG,
+  );
   const [fileName, setFileName] = useState("");
   const [isDatasetUploadPrompted, setIsDatasetUploadPrompted] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -968,6 +1389,18 @@ export function SpeechInputWorkbench() {
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
   const [bronVoiceLevel, setBronVoiceLevel] = useState(0);
+  const [agentDebugState, setAgentDebugState] = useState("idle");
+  const [lastDebugTranscript, setLastDebugTranscript] = useState("");
+  const [localGateActive, setLocalGateActive] = useState(false);
+  const [localSilenceMs, setLocalSilenceMs] = useState(0);
+  const [localSpeechMs, setLocalSpeechMs] = useState(0);
+  const [userDebugState, setUserDebugState] = useState("idle");
+  const [voiceDebugConfig, setVoiceDebugConfig] = useState<VoiceDebugConfig>(
+    DEFAULT_VOICE_DEBUG_CONFIG,
+  );
+  const [voiceDebugEntries, setVoiceDebugEntries] = useState<
+    VoiceDebugEntry[]
+  >([]);
   const [, setVoiceResponse] = useState("");
   const hasDataInput = fileName.length > 0;
   const shouldShowDatasetUpload = isDatasetUploadPrompted || hasDataInput;
@@ -1017,6 +1450,73 @@ export function SpeechInputWorkbench() {
     }, timeout);
   }
 
+  function addVoiceDebugEntry(
+    event: string,
+    detail: string,
+    tone: VoiceDebugTone = "neutral",
+  ) {
+    const id = debugEntryIdRef.current + 1;
+    debugEntryIdRef.current = id;
+
+    setVoiceDebugEntries((entries) =>
+      [
+        {
+          detail,
+          event,
+          id,
+          time: Date.now(),
+          tone,
+        },
+        ...entries,
+      ].slice(0, 12),
+    );
+  }
+
+  function resetVoiceDebugState() {
+    estimatedNoiseFloorRef.current = 0.012;
+    lastMicDebugUpdateRef.current = 0;
+    localSilenceStartedAtRef.current = null;
+    localSpeechStartedAtRef.current = null;
+    setAgentDebugState("idle");
+    setLastDebugTranscript("");
+    setLocalGateActive(false);
+    setLocalSilenceMs(0);
+    setLocalSpeechMs(0);
+    setUserDebugState("idle");
+    voiceDebugConfigRef.current = DEFAULT_VOICE_DEBUG_CONFIG;
+    setVoiceDebugConfig(DEFAULT_VOICE_DEBUG_CONFIG);
+    setVoiceDebugEntries([]);
+  }
+
+  function updateLocalVoiceDebug(level: number, now: number) {
+    if (now - lastMicDebugUpdateRef.current < 80) {
+      return;
+    }
+
+    lastMicDebugUpdateRef.current = now;
+    const currentNoiseFloor = estimatedNoiseFloorRef.current;
+    const isOverGate =
+      level >= voiceDebugConfigRef.current.activationThreshold;
+
+    if (!isOverGate) {
+      estimatedNoiseFloorRef.current = currentNoiseFloor * 0.96 + level * 0.04;
+    }
+
+    if (isOverGate) {
+      localSilenceStartedAtRef.current = null;
+      localSpeechStartedAtRef.current ??= now;
+      setLocalSpeechMs(now - localSpeechStartedAtRef.current);
+      setLocalSilenceMs(0);
+    } else {
+      localSpeechStartedAtRef.current = null;
+      localSilenceStartedAtRef.current ??= now;
+      setLocalSilenceMs(now - localSilenceStartedAtRef.current);
+      setLocalSpeechMs(0);
+    }
+
+    setLocalGateActive(isOverGate);
+  }
+
   function clearVoiceResponse() {
     setVoiceResponse("");
 
@@ -1049,6 +1549,11 @@ export function SpeechInputWorkbench() {
     void micAnalyserRef.current?.cleanup().catch(() => undefined);
     micAnalyserRef.current = null;
     micLevelRef.current = 0;
+    localSilenceStartedAtRef.current = null;
+    localSpeechStartedAtRef.current = null;
+    setLocalGateActive(false);
+    setLocalSilenceMs(0);
+    setLocalSpeechMs(0);
     setMicLevel(0);
   }
 
@@ -1142,6 +1647,7 @@ export function SpeechInputWorkbench() {
           micLevelRef.current = smoothedLevel;
         }
 
+        updateLocalVoiceDebug(smoothedLevel, performance.now());
         micAnalyserFrameRef.current =
           window.requestAnimationFrame(readMicLevel);
       };
@@ -1291,6 +1797,16 @@ export function SpeechInputWorkbench() {
     participant?.setVolume(1);
     const audioTrack = track as RemoteAudioTrack;
     audioTrack.setVolume(1);
+    const isAgentAudio =
+      !participant || !participant.identity.startsWith("speaker-");
+
+    if (isAgentAudio) {
+      addVoiceDebugEntry(
+        "agent_audio_subscribed",
+        participant?.identity || trackId,
+        "good",
+      );
+    }
 
     const element = audioTrack.attach();
     element.autoplay = true;
@@ -1310,7 +1826,7 @@ export function SpeechInputWorkbench() {
       element,
     ];
 
-    if (!participant || !participant.identity.startsWith("speaker-")) {
+    if (isAgentAudio) {
       startBronAnalyser(audioTrack, trackId);
     }
 
@@ -1355,13 +1871,32 @@ export function SpeechInputWorkbench() {
       return;
     }
 
+    setLastDebugTranscript(transcript);
+    addVoiceDebugEntry(
+      `${role}_transcript_final`,
+      transcript.slice(0, 96),
+      role === "assistant" ? "good" : "neutral",
+    );
     appendConversationMessage({ role, content: transcript });
 
     if (role === "user") {
       spokenInputRef.current = transcript;
+      const shouldShowUploadPrompt = mentionsCustomDataset(transcript);
 
-      if (mentionsCustomDataset(transcript)) {
+      if (shouldShowUploadPrompt) {
+        addVoiceDebugEntry(
+          "client_upload_fallback",
+          "final transcript matched upload intent",
+          "good",
+        );
         showDatasetUploadPrompt();
+      } else if (mentionsStartAgentWork(transcript)) {
+        addVoiceDebugEntry(
+          "client_handoff_fallback",
+          "final transcript matched handoff intent",
+          "good",
+        );
+        startAgentWorkHandoff();
       }
     }
   }
@@ -1376,6 +1911,11 @@ export function SpeechInputWorkbench() {
     }
 
     showDatasetUploadPrompt();
+    addVoiceDebugEntry(
+      "tool_upload_received",
+      "LiveKit upload tool message received",
+      "good",
+    );
   }
 
   async function handleStartAgentWorkStream(reader: AsyncIterable<string>) {
@@ -1386,6 +1926,64 @@ export function SpeechInputWorkbench() {
     }
 
     startAgentWorkHandoff();
+    addVoiceDebugEntry(
+      "tool_handoff_received",
+      "LiveKit handoff tool message received",
+      "good",
+    );
+  }
+
+  function handleVoiceDebugMessage(message: VoiceDebugMessage) {
+    if (message.type !== "voice_debug" || !message.event) {
+      return;
+    }
+
+    const payload = message.payload;
+    const detail = describeVoiceDebugEvent(message.event, payload);
+
+    addVoiceDebugEntry(message.event, detail, getDebugTone(message.event));
+
+    if (message.event === "agent_state_changed") {
+      setAgentDebugState(getDebugPayloadString(payload, "to") || "unknown");
+    }
+
+    if (message.event === "user_state_changed") {
+      setUserDebugState(getDebugPayloadString(payload, "to") || "unknown");
+    }
+
+    if (message.event === "user_input_transcribed") {
+      const transcript = getDebugPayloadString(payload, "transcript");
+
+      if (transcript) {
+        setLastDebugTranscript(transcript);
+      }
+    }
+
+    if (message.event === "room_connected") {
+      const nextConfig = getVoiceDebugConfigFromPayload(payload);
+      voiceDebugConfigRef.current = nextConfig;
+      setVoiceDebugConfig(nextConfig);
+      setAgentDebugState("listening");
+      setUserDebugState("listening");
+    }
+  }
+
+  async function handleVoiceDebugStream(reader: AsyncIterable<string>) {
+    let text = "";
+
+    for await (const chunk of reader) {
+      text += chunk;
+    }
+
+    if (text.trim().length === 0) {
+      return;
+    }
+
+    try {
+      handleVoiceDebugMessage(JSON.parse(text) as VoiceDebugMessage);
+    } catch {
+      addVoiceDebugEntry("debug_parse_failed", text.slice(0, 80), "error");
+    }
   }
 
   function startAgentWorkHandoff() {
@@ -1432,6 +2030,8 @@ export function SpeechInputWorkbench() {
       return;
     }
 
+    resetVoiceDebugState();
+    addVoiceDebugEntry("client_start", "requesting LiveKit token", "neutral");
     setIsConnectingVoice(true);
     setIsListening(true);
     clearVoiceResponse();
@@ -1470,11 +2070,21 @@ export function SpeechInputWorkbench() {
           );
         });
       });
+      room.registerTextStreamHandler(VOICE_DEBUG_TOPIC, (reader) => {
+        void handleVoiceDebugStream(reader).catch(() => {
+          addVoiceDebugEntry(
+            "debug_stream_failed",
+            "could not read debug event",
+            "error",
+          );
+        });
+      });
 
       room.on(RoomEvent.ParticipantConnected, (participant) => {
         if (!participant.identity.startsWith("speaker-")) {
           setIsConnectingVoice(false);
           clearAgentWaitTimer();
+          addVoiceDebugEntry("agent_joined", participant.identity, "good");
           showTemporaryResponse("Voice agent connected. Speak now.", 2600);
         }
 
@@ -1488,11 +2098,21 @@ export function SpeechInputWorkbench() {
       room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
       room.on(RoomEvent.TrackSubscriptionFailed, (_trackSid, participant) => {
         if (!participant.identity.startsWith("speaker-")) {
+          addVoiceDebugEntry(
+            "agent_audio_failed",
+            participant.identity,
+            "error",
+          );
           showTemporaryResponse("Agent audio track could not be subscribed.");
         }
       });
       room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
       room.on(RoomEvent.LocalAudioSilenceDetected, () => {
+        addVoiceDebugEntry(
+          "local_silence_detected",
+          "LiveKit sees silence on the mic",
+          "warn",
+        );
         showTemporaryResponse(
           "Your mic is connected, but LiveKit detects silence. Check the input device.",
         );
@@ -1512,6 +2132,7 @@ export function SpeechInputWorkbench() {
         );
       });
       room.on(RoomEvent.Disconnected, () => {
+        addVoiceDebugEntry("room_disconnected", "client disconnected", "warn");
         liveKitRoomRef.current = null;
         setIsListening(false);
         setIsConnectingVoice(false);
@@ -1529,16 +2150,19 @@ export function SpeechInputWorkbench() {
         canSubscribe: true,
         dispatchAgent: true,
       });
+      addVoiceDebugEntry("token_ready", voiceRoom, "neutral");
       await room.connect(url, token);
+      addVoiceDebugEntry("room_connected", "client connected", "good");
       await room.startAudio();
       const microphoneReady = waitForLocalMicrophone(room);
       const microphonePublication =
         await room.localParticipant.setMicrophoneEnabled(true, {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true,
-        });
+          autoGainControl: false,
+      });
       startMicAnalyser(microphonePublication?.audioTrack);
+      addVoiceDebugEntry("mic_published", "local audio track active", "good");
       await microphoneReady;
 
       if (
@@ -1558,6 +2182,7 @@ export function SpeechInputWorkbench() {
         if (!participant.identity.startsWith("speaker-")) {
           setIsConnectingVoice(false);
           clearAgentWaitTimer();
+          addVoiceDebugEntry("agent_present", participant.identity, "good");
           showTemporaryResponse("Voice agent connected. Speak now.", 2600);
         }
 
@@ -1714,6 +2339,20 @@ export function SpeechInputWorkbench() {
           className="pointer-events-none absolute inset-0 z-[6] bg-[#030303]/58 backdrop-blur-[1px] [mask-image:radial-gradient(circle_at_center,transparent_0%,transparent_28%,black_76%)]"
         />
       ) : null}
+      <VoiceDebugPanel
+        agentState={agentDebugState}
+        bronVoiceLevel={bronVoiceLevel}
+        config={voiceDebugConfig}
+        entries={voiceDebugEntries}
+        isConnected={isListening}
+        isConnecting={isConnectingVoice}
+        lastTranscript={lastDebugTranscript}
+        localGateActive={localGateActive}
+        localSilenceMs={localSilenceMs}
+        localSpeechMs={localSpeechMs}
+        micLevel={micLevel}
+        userState={userDebugState}
+      />
 
       <header className="relative z-20 flex h-20 items-center justify-between">
         <button
