@@ -36,6 +36,93 @@ export const circuits = [
   { key: "yas_marina", name: "Yas Marina", city: "Abu Dhabi", country: "UAE", grandPrix: "Abu Dhabi Grand Prix", raceDate: "2026-12-06", latitude: 24.4672, longitude: 54.6031 },
 ] as const satisfies Circuit[];
 
+/** 2026 calendar order used by the current visualization (left panel). */
+export const currentCalendarKeys = circuits.map((circuit) => circuit.key);
+
+/** Proposed optimized calendar order (right panel). */
+export const proposedCalendarKeys = [
+  "sakhir",
+  "jeddah",
+  "baku",
+  "losail",
+  "yas_marina",
+  "melbourne",
+  "shanghai",
+  "suzuka",
+  "singapore",
+  "monaco",
+  "barcelona",
+  "madrid",
+  "spielberg",
+  "silverstone",
+  "budapest",
+  "spa",
+  "zandvoort",
+  "monza",
+  "miami",
+  "montreal",
+  "austin",
+  "mexico_city",
+  "sao_paulo",
+  "las_vegas",
+] as const satisfies readonly string[];
+
+/** ISO-style season week per race for the proposed calendar. */
+export const proposedCalendarWeeks: Record<(typeof proposedCalendarKeys)[number], number> = {
+  sakhir: 8,
+  jeddah: 10,
+  baku: 12,
+  losail: 14,
+  yas_marina: 16,
+  melbourne: 18,
+  shanghai: 20,
+  suzuka: 22,
+  singapore: 24,
+  monaco: 26,
+  barcelona: 28,
+  madrid: 30,
+  spielberg: 33,
+  silverstone: 35,
+  budapest: 37,
+  spa: 39,
+  zandvoort: 40,
+  monza: 41,
+  miami: 43,
+  montreal: 44,
+  austin: 46,
+  mexico_city: 47,
+  sao_paulo: 49,
+  las_vegas: 50,
+};
+
+export type CalendarStop = Circuit & { week: number };
+
+export function isoWeekFromRaceDate(raceDate: string) {
+  const date = new Date(`${raceDate}T12:00:00`);
+  const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNumber = utcDate.getUTCDay() || 7;
+  utcDate.setUTCDate(utcDate.getUTCDate() + 4 - dayNumber);
+  const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+  return Math.ceil(((utcDate.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+}
+
+export function getCircuitsInOrder(keys: readonly string[]) {
+  return keys.map((key) => getCircuit(key));
+}
+
+export function buildCalendarStops(
+  keys: readonly string[],
+  weekByKey?: Partial<Record<string, number>>,
+): CalendarStop[] {
+  return keys.map((key) => {
+    const circuit = getCircuit(key);
+    return {
+      ...circuit,
+      week: weekByKey?.[key] ?? isoWeekFromRaceDate(circuit.raceDate),
+    };
+  });
+}
+
 export function formatRaceDate(raceDate: string) {
   return new Intl.DateTimeFormat("en-GB", {
     weekday: "long",

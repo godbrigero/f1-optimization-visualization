@@ -7,9 +7,17 @@ import type { Feature, FeatureCollection, LineString } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { AirplaneFlightMap } from "@/components/airplane-flight-map";
+import { CalendarStatsLegend } from "@/components/calendar-stats-legend";
 import { CircuitMarker, type CircuitMarkerState } from "@/components/circuit-marker";
 import { Button } from "@/components/ui/button";
-import { circuits, formatRaceDate } from "@/lib/f1-circuits";
+import {
+  type CalendarStop,
+  buildCalendarStops,
+  currentCalendarKeys,
+  formatRaceDate,
+  proposedCalendarKeys,
+  proposedCalendarWeeks,
+} from "@/lib/f1-circuits";
 import { greatCirclePoints } from "@/lib/great-circle";
 import {
   DEFAULT_FLIGHT_SPEED,
@@ -23,12 +31,18 @@ const MAP_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.j
 const STOP_PAUSE_MS = 500;
 
 type LegStatus = "preview" | "completed" | "upcoming";
+type TrailTheme = "red" | "green";
+
+const COMPLETED_TRAIL_COLORS: Record<TrailTheme, string> = {
+  red: "rgba(239, 68, 68, 0.55)",
+  green: "rgba(52, 211, 153, 0.55)",
+};
 
 function buildRouteGeoJson(
   legs: Array<{
     id: string;
-    from: (typeof circuits)[number];
-    to: (typeof circuits)[number];
+    from: CalendarStop;
+    to: CalendarStop;
     status: LegStatus;
   }>,
 ): FeatureCollection<LineString> {
@@ -53,16 +67,39 @@ function buildRouteGeoJson(
   };
 }
 
-export function FlightMap() {
-  const pauseTimeoutRef = useRef<number | null>(null);
-  const [flightRun, setFlightRun] = useState(0);
-  const [activeLegIndex, setActiveLegIndex] = useState<number | null>(null);
-  const [reachedStopIndex, setReachedStopIndex] = useState(0);
-  const [displayStopIndex, setDisplayStopIndex] = useState(0);
-  const [isPausedAtStop, setIsPausedAtStop] = useState(false);
-  const [flightSpeed, setFlightSpeed] = useState(DEFAULT_FLIGHT_SPEED);
+type FlightMapPanelProps = {
+  mapId: string;
+  calendarLabel: string;
+  calendarStops: CalendarStop[];
+  trailTheme: TrailTheme;
+  flightRun: number;
+  activeLegIndex: number | null;
+  activeLegDurationMs: number | null;
+  reachedStopIndex: number;
+  displayStopIndex: number;
+  isPausedAtStop: boolean;
+  drivesPlayback: boolean;
+  onLegComplete: () => void;
+};
 
-  const raceRoute = useMemo(() => circuits.map((circuit) => ({ circuit })), []);
+function FlightMapPanel({
+  mapId,
+  calendarLabel,
+  calendarStops,
+  trailTheme,
+  flightRun,
+  activeLegIndex,
+  activeLegDurationMs,
+  reachedStopIndex,
+  displayStopIndex,
+  isPausedAtStop,
+  drivesPlayback,
+  onLegComplete,
+}: FlightMapPanelProps) {
+  const raceRoute = useMemo(
+    () => calendarStops.map((circuit) => ({ circuit })),
+    [calendarStops],
+  );
 
   const raceLegs = useMemo(
     () =>
@@ -76,28 +113,6 @@ export function FlightMap() {
   const isFlying = activeLegIndex !== null;
   const hasStarted = flightRun > 0;
   const displayedCircuit = raceRoute[displayStopIndex].circuit;
-
-  const clearPauseTimeout = useCallback(() => {
-    if (pauseTimeoutRef.current !== null) {
-      window.clearTimeout(pauseTimeoutRef.current);
-      pauseTimeoutRef.current = null;
-    }
-  }, []);
-
-  const pauseAtStop = useCallback(
-    (stopIndex: number, onResume: () => void) => {
-      clearPauseTimeout();
-      setDisplayStopIndex(stopIndex);
-      setIsPausedAtStop(true);
-      pauseTimeoutRef.current = window.setTimeout(() => {
-        setIsPausedAtStop(false);
-        onResume();
-      }, STOP_PAUSE_MS);
-    },
-    [clearPauseTimeout],
-  );
-
-  useEffect(() => clearPauseTimeout, [clearPauseTimeout]);
 
   const getMarkerState = useCallback(
     (index: number): CircuitMarkerState => {
@@ -139,36 +154,12 @@ export function FlightMap() {
     return buildRouteGeoJson(legs);
   }, [activeLegIndex, hasStarted, raceLegs, reachedStopIndex]);
 
-  const handleStart = () => {
-    clearPauseTimeout();
-    setFlightRun((run) => run + 1);
-    setReachedStopIndex(0);
-    setActiveLegIndex(null);
-    pauseAtStop(0, () => setActiveLegIndex(0));
-  };
-
-  const handleLegComplete = useCallback(() => {
-    setActiveLegIndex((currentLeg) => {
-      if (currentLeg === null) return null;
-
-      const nextStop = currentLeg + 1;
-      setReachedStopIndex(nextStop);
-
-      pauseAtStop(nextStop, () => {
-        if (nextStop < raceLegs.length) {
-          setActiveLegIndex(nextStop);
-        }
-      });
-
-      return null;
-    });
-  }, [pauseAtStop, raceLegs.length]);
-
   const activeLeg = activeLegIndex !== null ? raceLegs[activeLegIndex] : null;
 
   return (
-    <main className="fixed inset-0 overflow-hidden bg-[#0a0f14]">
+    <section className="relative min-h-0 min-w-0 flex-1 overflow-hidden border-white/10 [&:not(:first-child)]:border-l">
       <Map
+        id={mapId}
         initialViewState={{
           longitude: 10,
           latitude: 22,
@@ -179,9 +170,9 @@ export function FlightMap() {
         attributionControl={false}
         renderWorldCopies={false}
       >
-        <Source id="race-routes" type="geojson" data={routeGeoJson}>
+        <Source id={`${mapId}-race-routes`} type="geojson" data={routeGeoJson}>
           <Layer
-            id="race-routes-preview"
+            id={`${mapId}-race-routes-preview`}
             type="line"
             filter={["==", ["get", "status"], "preview"]}
             paint={{
@@ -191,7 +182,7 @@ export function FlightMap() {
             }}
           />
           <Layer
-            id="race-routes-upcoming"
+            id={`${mapId}-race-routes-upcoming`}
             type="line"
             filter={["==", ["get", "status"], "upcoming"]}
             paint={{
@@ -201,11 +192,11 @@ export function FlightMap() {
             }}
           />
           <Layer
-            id="race-routes-completed"
+            id={`${mapId}-race-routes-completed`}
             type="line"
             filter={["==", ["get", "status"], "completed"]}
             paint={{
-              "line-color": "rgba(52,211,153,0.55)",
+              "line-color": COMPLETED_TRAIL_COLORS[trailTheme],
               "line-width": 2,
             }}
           />
@@ -222,15 +213,15 @@ export function FlightMap() {
           />
         ))}
 
-        {activeLeg ? (
+        {activeLeg && activeLegDurationMs !== null ? (
           <AirplaneFlightMap
             key={`${flightRun}-${activeLegIndex}`}
             startTrigger={flightRun}
             autoStart
             from={{ latitude: activeLeg.from.latitude, longitude: activeLeg.from.longitude }}
             to={{ latitude: activeLeg.to.latitude, longitude: activeLeg.to.longitude }}
-            durationMs={legDurationMs(activeLeg.from, activeLeg.to, flightSpeed)}
-            onComplete={handleLegComplete}
+            durationMs={activeLegDurationMs}
+            onComplete={drivesPlayback ? onLegComplete : undefined}
           />
         ) : null}
       </Map>
@@ -238,17 +229,146 @@ export function FlightMap() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_35%,rgba(0,0,0,0.45)_100%)]" />
 
       <div
-        className={`absolute left-1/2 top-4 z-10 w-[min(92vw,32rem)] -translate-x-1/2 rounded-xl border border-white/15 bg-black/70 px-5 py-3 text-center shadow-lg shadow-black/40 backdrop-blur-sm transition-opacity duration-200 ${isPausedAtStop ? "opacity-100" : "opacity-95"}`}
+        className={`absolute left-1/2 top-4 z-10 w-[min(92%,20rem)] -translate-x-1/2 rounded-xl border border-white/15 bg-black/70 px-4 py-3 text-center shadow-lg shadow-black/40 backdrop-blur-sm transition-opacity duration-200 ${isPausedAtStop ? "opacity-100" : "opacity-95"}`}
       >
-        <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-white/50">
-          Lebronsseiur · Round {displayStopIndex + 1} · {displayedCircuit.city}
+        <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-white/45">
+          {calendarLabel}
         </p>
-        <p className="mt-1 text-base font-semibold text-white sm:text-lg">{displayedCircuit.grandPrix}</p>
-        <p className="mt-0.5 text-sm text-red-300">{formatRaceDate(displayedCircuit.raceDate)}</p>
+        <p className="mt-1 text-[11px] font-medium uppercase tracking-[0.2em] text-white/50">
+          Lebronsseiur · Wk {displayedCircuit.week} · Round {displayStopIndex + 1} ·{" "}
+          {displayedCircuit.city}
+        </p>
+        <p className="mt-1 text-sm font-semibold text-white sm:text-base">{displayedCircuit.grandPrix}</p>
+        <p className="mt-0.5 text-xs text-red-300 sm:text-sm">{formatRaceDate(displayedCircuit.raceDate)}</p>
       </div>
 
-      <div className="absolute left-4 top-4 z-10 flex flex-col gap-2">
-        <div className="rounded-lg border border-white/15 bg-black/65 p-1.5 shadow-lg shadow-black/30 backdrop-blur-sm">
+      <CalendarStatsLegend
+        calendarLabel={calendarLabel}
+        calendarStops={calendarStops}
+        trailTheme={trailTheme}
+        hasStarted={hasStarted}
+        reachedStopIndex={reachedStopIndex}
+        activeLegIndex={activeLegIndex}
+      />
+    </section>
+  );
+}
+
+export function FlightMap() {
+  const pauseTimeoutRef = useRef<number | null>(null);
+  const [flightRun, setFlightRun] = useState(0);
+  const [activeLegIndex, setActiveLegIndex] = useState<number | null>(null);
+  const [reachedStopIndex, setReachedStopIndex] = useState(0);
+  const [displayStopIndex, setDisplayStopIndex] = useState(0);
+  const [isPausedAtStop, setIsPausedAtStop] = useState(false);
+  const [flightSpeed, setFlightSpeed] = useState(DEFAULT_FLIGHT_SPEED);
+
+  const currentCalendar = useMemo(() => buildCalendarStops(currentCalendarKeys), []);
+  const proposedCalendar = useMemo(
+    () => buildCalendarStops(proposedCalendarKeys, proposedCalendarWeeks),
+    [],
+  );
+  const legCount = currentCalendar.length - 1;
+
+  const activeLegDurationMs = useMemo(() => {
+    if (activeLegIndex === null) {
+      return null;
+    }
+
+    const currentLeg = {
+      from: currentCalendar[activeLegIndex],
+      to: currentCalendar[activeLegIndex + 1],
+    };
+    const proposedLeg = {
+      from: proposedCalendar[activeLegIndex],
+      to: proposedCalendar[activeLegIndex + 1],
+    };
+
+    return Math.max(
+      legDurationMs(currentLeg.from, currentLeg.to, flightSpeed),
+      legDurationMs(proposedLeg.from, proposedLeg.to, flightSpeed),
+    );
+  }, [activeLegIndex, currentCalendar, flightSpeed, proposedCalendar]);
+
+  const clearPauseTimeout = useCallback(() => {
+    if (pauseTimeoutRef.current !== null) {
+      window.clearTimeout(pauseTimeoutRef.current);
+      pauseTimeoutRef.current = null;
+    }
+  }, []);
+
+  const pauseAtStop = useCallback(
+    (stopIndex: number, onResume: () => void) => {
+      clearPauseTimeout();
+      setDisplayStopIndex(stopIndex);
+      setIsPausedAtStop(true);
+      pauseTimeoutRef.current = window.setTimeout(() => {
+        setIsPausedAtStop(false);
+        onResume();
+      }, STOP_PAUSE_MS);
+    },
+    [clearPauseTimeout],
+  );
+
+  useEffect(() => clearPauseTimeout, [clearPauseTimeout]);
+
+  const handleStart = () => {
+    clearPauseTimeout();
+    setFlightRun((run) => run + 1);
+    setReachedStopIndex(0);
+    setActiveLegIndex(null);
+    pauseAtStop(0, () => setActiveLegIndex(0));
+  };
+
+  const handleLegComplete = useCallback(() => {
+    setActiveLegIndex((currentLeg) => {
+      if (currentLeg === null) return null;
+
+      const nextStop = currentLeg + 1;
+      setReachedStopIndex(nextStop);
+
+      pauseAtStop(nextStop, () => {
+        if (nextStop < legCount) {
+          setActiveLegIndex(nextStop);
+        }
+      });
+
+      return null;
+    });
+  }, [legCount, pauseAtStop]);
+
+  const sharedPanelProps = {
+    flightRun,
+    activeLegIndex,
+    activeLegDurationMs,
+    reachedStopIndex,
+    displayStopIndex,
+    isPausedAtStop,
+    onLegComplete: handleLegComplete,
+  };
+
+  return (
+    <main className="fixed inset-0 flex overflow-hidden bg-[#0a0f14]">
+      <FlightMapPanel
+        mapId="current-calendar"
+        calendarLabel="Current calendar"
+        calendarStops={currentCalendar}
+        trailTheme="red"
+        drivesPlayback
+        {...sharedPanelProps}
+      />
+
+      <FlightMapPanel
+        mapId="proposed-calendar"
+        calendarLabel="Proposed calendar"
+        calendarStops={proposedCalendar}
+        trailTheme="green"
+        drivesPlayback={false}
+        {...sharedPanelProps}
+      />
+
+      <div className="pointer-events-none absolute left-4 top-4 z-20 flex flex-col gap-2">
+        <div className="pointer-events-auto rounded-lg border border-white/15 bg-black/65 p-1.5 shadow-lg shadow-black/30 backdrop-blur-sm">
           <Button onClick={handleStart}>
             {flightRun === 0 ? (
               <PlaneTakeoff data-icon="inline-start" />
@@ -259,7 +379,7 @@ export function FlightMap() {
           </Button>
         </div>
 
-        <div className="w-52 rounded-lg border border-white/15 bg-black/65 px-3 py-2.5 shadow-lg shadow-black/30 backdrop-blur-sm">
+        <div className="pointer-events-auto w-52 rounded-lg border border-white/15 bg-black/65 px-3 py-2.5 shadow-lg shadow-black/30 backdrop-blur-sm">
           <div className="flex items-center justify-between gap-2">
             <label htmlFor="flight-speed" className="text-xs font-medium text-white/80">
               Flight speed
