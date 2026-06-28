@@ -25,6 +25,10 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 The app exposes a single tRPC endpoint at `/trpc`.
 
 - `livekit.createToken` creates a LiveKit room token.
+- `conversation.respond` sends the captured user utterance to the cheaper
+  DigitalOcean model.
+- `conversation.summarize` sends the conversation to the summary model and
+  returns the final implementation brief string.
 
 Example LiveKit token request:
 
@@ -46,6 +50,10 @@ curl -X POST "http://localhost:3000/trpc/livekit.createToken" \
 - `NEXT_PUBLIC_LIVEKIT_URL`
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
+- `DIGITALOCEAN_MODEL_API_KEY`
+- `DIGITALOCEAN_MODEL_BASE_URL`
+- `DIGITALOCEAN_CHAT_MODEL`
+- `DIGITALOCEAN_SUMMARY_MODEL`
 
 ## Deploy on Vercel
 

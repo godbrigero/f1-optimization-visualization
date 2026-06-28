@@ -3,7 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Mic, Upload } from "lucide-react";
+import { Room } from "livekit-client";
 import { cn } from "@/lib/utils";
+import { api } from "@/trpc/react";
 
 const acceptedFileTypes = ".csv,.json,.txt,.xlsx,.xls,.tsv";
 
@@ -25,26 +27,55 @@ type SpeechRecognitionLike = {
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
+type ConversationMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+const VOICE_ROOM = "f1-model-conversation";
+
+function createIdentity() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `speaker-${crypto.randomUUID()}`;
+  }
+
+  return `speaker-${Date.now()}`;
+}
+
 export function SpeechInputWorkbench() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const responseTimerRef = useRef<number | null>(null);
+  const liveKitRoomRef = useRef<Room | null>(null);
+  const responseAudioRef = useRef<HTMLAudioElement | null>(null);
   const [fileName, setFileName] = useState("");
   const [isListening, setIsListening] = useState(false);
+  const [isConnectingVoice, setIsConnectingVoice] = useState(false);
+  const [isAgentThinking, setIsAgentThinking] = useState(false);
+  const [isSummarizing, setIsSummarizing] = useState(false);
   const [spokenInput, setSpokenInput] = useState("");
   const [voiceResponse, setVoiceResponse] = useState("");
+  const [agentResponse, setAgentResponse] = useState("");
+  const [conversation, setConversation] = useState<ConversationMessage[]>([]);
   const [debugUnlocked, setDebugUnlocked] = useState(false);
   const hasSpeechInput = spokenInput.trim().split(/\s+/).filter(Boolean).length > 0;
   const hasDataInput = fileName.length > 0;
-  const canContinue = (hasSpeechInput && hasDataInput) || debugUnlocked;
-  const showVoiceResponse = isListening || voiceResponse.length > 0;
+  const canContinue = ((hasSpeechInput && hasDataInput) || debugUnlocked) && !isSummarizing;
+  const showVoiceResponse =
+    isConnectingVoice || isListening || isAgentThinking || voiceResponse.length > 0 || agentResponse.length > 0;
+  const tokenMutation = api.livekit.createToken.useMutation();
+  const respondMutation = api.conversation.respond.useMutation();
+  const summarizeMutation = api.conversation.summarize.useMutation();
+  const speakMutation = api.conversation.speak.useMutation();
 
   useEffect(() => {
     router.prefetch("/agents");
 
     return () => {
       recognitionRef.current?.stop();
+      liveKitRoomRef.current?.disconnect();
+      responseAudioRef.current?.pause();
 
       if (responseTimerRef.current) {
         window.clearTimeout(responseTimerRef.current);
@@ -82,11 +113,101 @@ export function SpeechInputWorkbench() {
     }
   }
 
-  function startSpeechInput() {
+  async function stopLiveKitRoom() {
+    const room = liveKitRoomRef.current;
+    liveKitRoomRef.current = null;
+
+    if (!room) {
+      return;
+    }
+
+    await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+    room.disconnect();
+  }
+
+  async function playModelVoice(response: string) {
+    responseAudioRef.current?.pause();
+    responseAudioRef.current = null;
+
+    try {
+      const { audioBase64, mimeType } = await speakMutation.mutateAsync({
+        input: response,
+      });
+      const audio = new Audio(`data:${mimeType};base64,${audioBase64}`);
+
+      responseAudioRef.current = audio;
+      await audio.play();
+    } catch {
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(response));
+      }
+    }
+  }
+
+  async function startLiveKitRoom() {
+    if (liveKitRoomRef.current) {
+      return;
+    }
+
+    setIsConnectingVoice(true);
+
+    try {
+      const identity = createIdentity();
+      const { token, url } = await tokenMutation.mutateAsync({
+        identity,
+        room: VOICE_ROOM,
+        name: "Model conversation",
+        metadata: JSON.stringify({ feature: "digitalocean-model-conversation" }),
+        canPublish: true,
+        canSubscribe: true,
+      });
+      const room = new Room();
+
+      liveKitRoomRef.current = room;
+      await room.connect(url, token);
+      await room.localParticipant.setMicrophoneEnabled(true);
+    } finally {
+      setIsConnectingVoice(false);
+    }
+  }
+
+  async function sendTranscriptToModel(transcript: string) {
+    const userMessage: ConversationMessage = {
+      role: "user",
+      content: transcript,
+    };
+    const nextConversation = [...conversation, userMessage];
+
+    setConversation(nextConversation);
+    setIsAgentThinking(true);
+    setAgentResponse("");
+
+    try {
+      const { response } = await respondMutation.mutateAsync({
+        messages: nextConversation,
+      });
+      const assistantMessage: ConversationMessage = {
+        role: "assistant",
+        content: response,
+      };
+
+      setConversation([...nextConversation, assistantMessage]);
+      setAgentResponse(response);
+      await playModelVoice(response);
+    } catch (error) {
+      setAgentResponse(error instanceof Error ? error.message : "The model did not respond.");
+    } finally {
+      setIsAgentThinking(false);
+    }
+  }
+
+  async function startSpeechInput() {
     if (isListening) {
       recognitionRef.current?.stop();
       setIsListening(false);
       clearVoiceResponse();
+      await stopLiveKitRoom();
       return;
     }
 
@@ -102,6 +223,13 @@ export function SpeechInputWorkbench() {
 
     if (!SpeechRecognition) {
       showTemporaryResponse("Speech input is not supported in this browser.");
+      return;
+    }
+
+    try {
+      await startLiveKitRoom();
+    } catch (error) {
+      showTemporaryResponse(error instanceof Error ? error.message : "Could not connect LiveKit.");
       return;
     }
 
@@ -134,6 +262,7 @@ export function SpeechInputWorkbench() {
         if (isFinal) {
           setSpokenInput(transcript);
           showTemporaryResponse(transcript);
+          void sendTranscriptToModel(transcript);
         }
       }
     };
@@ -148,20 +277,39 @@ export function SpeechInputWorkbench() {
     };
 
     setIsListening(true);
-    showTemporaryResponse("Listening...");
+    showTemporaryResponse("Listening through LiveKit...");
     recognition.start();
   }
 
-  function continueToAgents() {
+  async function continueToAgents() {
     if (!canContinue) {
       return;
     }
 
     recognitionRef.current?.stop();
-    router.push("/agents", {
-      scroll: false,
-      transitionTypes: ["nav-forward"],
-    });
+    await stopLiveKitRoom();
+    setIsSummarizing(true);
+
+    try {
+      const summaryMessages =
+        conversation.length > 0
+          ? conversation
+          : spokenInput
+            ? [{ role: "user" as const, content: spokenInput }]
+            : [{ role: "user" as const, content: "Debug-unlocked conversation without captured speech." }];
+      const { summary } = await summarizeMutation.mutateAsync({
+        messages: summaryMessages,
+      });
+
+      window.sessionStorage.setItem("f1-agent-conversation-summary", summary);
+      router.push("/agents", {
+        scroll: false,
+        transitionTypes: ["nav-forward"],
+      });
+    } catch (error) {
+      showTemporaryResponse(error instanceof Error ? error.message : "Could not summarize conversation.");
+      setIsSummarizing(false);
+    }
   }
 
   return (
@@ -194,7 +342,11 @@ export function SpeechInputWorkbench() {
               {isListening ? "Listening" : hasSpeechInput ? "Voice captured" : "Talk to agent"}
             </span>
             <span className="mt-1.5 text-[11px] leading-none text-white/42">
-              {hasSpeechInput ? "Speech input complete" : "Say at least one word"}
+              {isConnectingVoice
+                ? "Connecting LiveKit"
+                : hasSpeechInput
+                  ? "Speech input complete"
+                  : "Say at least one word"}
             </span>
           </span>
 
@@ -230,7 +382,11 @@ export function SpeechInputWorkbench() {
             aria-live="polite"
             className="min-h-0 max-w-md overflow-hidden text-center text-sm text-white/38"
           >
-            {voiceResponse || "Listening..."}
+            {isAgentThinking
+              ? "Model is thinking..."
+              : agentResponse
+                ? `Model: ${agentResponse}`
+                : voiceResponse || "Listening..."}
           </p>
         </div>
 
@@ -293,7 +449,7 @@ export function SpeechInputWorkbench() {
           disabled={!canContinue}
           className="h-11 rounded-md border border-white/14 bg-[#0b0b0b] px-9 text-sm font-medium text-white/90 shadow-[0_18px_48px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.055)] transition hover:-translate-y-px hover:border-white/26 hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-white/15 disabled:cursor-default"
         >
-          Continue
+          {isSummarizing ? "Summarizing..." : "Continue"}
         </button>
       </div>
     </main>

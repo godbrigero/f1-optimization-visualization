@@ -24,3 +24,17 @@ export function getLiveKitEnv() {
     apiSecret: requireEnv("LIVEKIT_API_SECRET"),
   };
 }
+
+export function getDigitalOceanModelEnv() {
+  return {
+    apiKey: requireEnv("DIGITALOCEAN_MODEL_API_KEY"),
+    baseUrl: optionalEnv("DIGITALOCEAN_MODEL_BASE_URL") ?? "https://inference.do-ai.run/v1",
+    chatModel: requireEnv("DIGITALOCEAN_CHAT_MODEL"),
+    summaryModel: requireEnv("DIGITALOCEAN_SUMMARY_MODEL"),
+    ttsInstructions:
+      optionalEnv("DIGITALOCEAN_TTS_INSTRUCTIONS") ??
+      "A polished, warm, natural voice with calm confidence, clear pacing, and subtle energy. Avoid sounding robotic or overly dramatic.",
+    ttsModel: optionalEnv("DIGITALOCEAN_TTS_MODEL") ?? "qwen3-tts-voicedesign",
+    ttsVoice: optionalEnv("DIGITALOCEAN_TTS_VOICE") ?? "alloy",
+  };
+}

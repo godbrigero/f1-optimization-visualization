@@ -252,6 +252,13 @@ export function AgentGraph() {
       mermaid: mermaidGraph,
     },
   ]);
+  const [conversationSummary] = useState(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+
+    return window.sessionStorage.getItem("f1-agent-conversation-summary") ?? "";
+  });
   const [activeIterationId, setActiveIterationId] = useState(1);
   const [viewBox, setViewBox] = useState<GraphViewBox>(initialViewBox);
   const [isPanning, setIsPanning] = useState(false);
@@ -447,6 +454,15 @@ export function AgentGraph() {
       }`}
     >
       <h1 className="sr-only">Interconnected agent node graph</h1>
+
+      {conversationSummary ? (
+        <section className="absolute left-1/2 top-5 z-20 w-[min(760px,calc(100vw-2.5rem))] -translate-x-1/2 rounded-md border border-white/14 bg-black/82 px-4 py-3 shadow-[0_18px_50px_rgba(0,0,0,0.38)] backdrop-blur-xl">
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/38">
+            Conversation summary
+          </div>
+          <p className="mt-2 line-clamp-3 text-sm leading-6 text-white/72">{conversationSummary}</p>
+        </section>
+      ) : null}
 
       <button
         type="button"
