@@ -22,7 +22,11 @@ import {
   type RemoteAudioTrack,
   type RemoteTrack,
 } from "livekit-client";
-import { ATTACHED_DATASET_STORAGE_KEY, storeAttachedDataset, type AttachedDatasetWindow } from "@/lib/attached-dataset";
+import {
+  ATTACHED_DATASET_STORAGE_KEY,
+  storeAttachedDataset,
+  type AttachedDatasetWindow,
+} from "@/lib/attached-dataset";
 import { cn } from "@/lib/utils";
 import { api } from "@/trpc/react";
 
@@ -33,6 +37,15 @@ const START_AGENT_WORK_TOPIC = "lebronsseiur.start_agent_work";
 const VOICE_ROOM_PREFIX = "lebronsseiur-model-conversation";
 const CONVERSATION_MESSAGES_STORAGE_KEY = "f1-agent-conversation-messages";
 const START_AGENT_WORK_HANDOFF_DELAY_MS = 4200;
+const ROUNDED_TRIANGLE_CLIP_PATH =
+  "polygon(50% 1.5%, 53.5% 3.5%, 98% 88%, 96.5% 92%, 91% 94%, 9% 94%, 3.5% 92%, 2% 88%, 46.5% 3.5%)";
+const ROUNDED_TRIANGLE_PATH =
+  "M 50 4 Q 54 4 57 10 L 96 84 Q 100 92 90 92 L 10 92 Q 0 92 4 84 L 43 10 Q 46 4 50 4 Z";
+const CROWN_PRIMARY_PATH =
+  "M 24 62 L 28 38 L 41 52 L 50 31 L 59 52 L 72 38 L 76 62 Z";
+const CROWN_BASE_PATH = "M 27 65 H 73 L 69 75 H 31 Z";
+const CROWN_INNER_PATH =
+  "M 32 60 L 36 49 M 45 59 L 50 45 M 55 59 L 64 49 M 34 68 H 66";
 
 type ConversationMessage = {
   role: "user" | "assistant";
@@ -78,7 +91,9 @@ function loadStoredConversationMessages() {
     return [];
   }
 
-  const storedMessages = window.sessionStorage.getItem(CONVERSATION_MESSAGES_STORAGE_KEY);
+  const storedMessages = window.sessionStorage.getItem(
+    CONVERSATION_MESSAGES_STORAGE_KEY,
+  );
 
   if (!storedMessages) {
     return [];
@@ -87,14 +102,19 @@ function loadStoredConversationMessages() {
   try {
     const parsedMessages = JSON.parse(storedMessages);
 
-    return Array.isArray(parsedMessages) ? parsedMessages.filter(isConversationMessage) : [];
+    return Array.isArray(parsedMessages)
+      ? parsedMessages.filter(isConversationMessage)
+      : [];
   } catch {
     return [];
   }
 }
 
 function storeConversationMessages(messages: ConversationMessage[]) {
-  window.sessionStorage.setItem(CONVERSATION_MESSAGES_STORAGE_KEY, JSON.stringify(messages));
+  window.sessionStorage.setItem(
+    CONVERSATION_MESSAGES_STORAGE_KEY,
+    JSON.stringify(messages),
+  );
 }
 
 function mentionsCustomDataset(text: string) {
@@ -133,7 +153,10 @@ function mentionsCustomDataset(text: string) {
 }
 
 const voiceGridSize = 11;
-const voiceGridItems = Array.from({ length: voiceGridSize * voiceGridSize }, (_, index) => index);
+const voiceGridItems = Array.from(
+  { length: voiceGridSize * voiceGridSize },
+  (_, index) => index,
+);
 const ambientPixelColumns = 124;
 const ambientPixelRows = 32;
 
@@ -142,11 +165,9 @@ type GridCoordinate = {
   x: number;
   y: number;
 };
-type CursorPosition = {
-  x: number;
-  y: number;
-};
-type SquarePointerEvent = MouseEvent<HTMLElement> | ReactPointerEvent<HTMLElement>;
+type SquarePointerEvent =
+  | MouseEvent<HTMLElement>
+  | ReactPointerEvent<HTMLElement>;
 
 type AudioAnalyserHandle = ReturnType<typeof createAudioAnalyser>;
 
@@ -158,10 +179,16 @@ type AmbientPixel = {
   dimOpacity: number;
   isDimmed: boolean;
   isVisible: boolean;
+  rotation: number;
 };
 
 function seededUnit(index: number, salt: number) {
-  return Math.sin(index * 12.9898 + salt * 78.233) * 43758.5453 % 1;
+  let value = Math.imul(index + 1, 374761393) ^ Math.imul(salt + 1, 668265263);
+  value ^= value >>> 13;
+  value = Math.imul(value, 1274126177);
+  value ^= value >>> 16;
+
+  return (value >>> 0) / 4294967295;
 }
 
 const ambientPixels: AmbientPixel[] = Array.from(
@@ -173,16 +200,25 @@ const ambientPixels: AmbientPixel[] = Array.from(
     const centerY = (ambientPixelRows - 1) / 2;
     const distanceX = Math.abs(column - centerX) / centerX;
     const distanceY = Math.abs(row - centerY) / centerY;
-    const weightedDistance = Math.sqrt(distanceX ** 2 * 0.55 + distanceY ** 2 * 1.95);
+    const weightedDistance = Math.sqrt(
+      distanceX ** 2 * 0.55 + distanceY ** 2 * 1.95,
+    );
     const phase = Math.abs(seededUnit(index, 1));
     const brightness = Math.abs(seededUnit(index, 2));
     const cadence = Math.abs(seededUnit(index, 3));
     const presence = Math.abs(seededUnit(index, 4));
-    const showChance = Math.max(0.012, (0.46 * Math.max(0, 1 - weightedDistance)) ** 1.18);
+    const showChance = Math.max(
+      0.012,
+      (0.46 * Math.max(0, 1 - weightedDistance)) ** 1.18,
+    );
     const isVisible = presence < showChance;
     const isDimmed = phase < 0.5;
-    const baseOpacity = isDimmed ? 0.035 + brightness * 0.035 : 0.105 + brightness * 0.075;
-    const dimOpacity = isDimmed ? 0.018 + brightness * 0.018 : 0.045 + brightness * 0.035;
+    const baseOpacity = isDimmed
+      ? 0.035 + brightness * 0.035
+      : 0.105 + brightness * 0.075;
+    const dimOpacity = isDimmed
+      ? 0.018 + brightness * 0.018
+      : 0.045 + brightness * 0.035;
 
     return {
       animationDelay: -phase * 7.2,
@@ -192,73 +228,118 @@ const ambientPixels: AmbientPixel[] = Array.from(
       dimOpacity,
       isDimmed,
       isVisible,
+      rotation: Math.round(seededUnit(index, 5) * 360),
     };
   },
 );
 
-function createSerpentinePath(columnCount: number, rowCount: number) {
+function isTriangleGridCoordinate(
+  x: number,
+  y: number,
+  columnCount: number,
+  rowCount: number,
+) {
+  const normalizedX = (x + 0.5) / columnCount;
+  const normalizedY = (y + 0.5) / rowCount;
+
+  return normalizedY >= Math.abs(normalizedX - 0.5) * 2;
+}
+
+function getTriangleRowColumns(
+  row: number,
+  columnCount: number,
+  rowCount: number,
+) {
+  return Array.from({ length: columnCount }, (_, column) => column).filter(
+    (column) => isTriangleGridCoordinate(column, row, columnCount, rowCount),
+  );
+}
+
+function createTriangleRowsPath(columnCount: number, rowCount: number) {
   const path: GridCoordinate[] = [];
 
-  for (let column = 0; column < columnCount; column += 1) {
-    if (column % 2 === 0) {
-      for (let row = 0; row < rowCount; row += 1) {
-        path.push({ x: column, y: row });
-      }
+  for (let row = 0; row < rowCount; row += 1) {
+    const rowCoordinates = getTriangleRowColumns(
+      row,
+      columnCount,
+      rowCount,
+    ).map((column) => ({ x: column, y: row }));
+
+    path.push(...(row % 2 === 0 ? rowCoordinates : rowCoordinates.reverse()));
+  }
+
+  return path;
+}
+
+function createTrianglePerimeterPath(columnCount: number, rowCount: number) {
+  const leftSide: GridCoordinate[] = [];
+  const rightSide: GridCoordinate[] = [];
+  const bottomSide: GridCoordinate[] = [];
+
+  for (let row = 0; row < rowCount; row += 1) {
+    const columns = getTriangleRowColumns(row, columnCount, rowCount);
+
+    if (columns.length === 0) {
       continue;
     }
 
-    for (let row = rowCount - 1; row >= 0; row -= 1) {
-      path.push({ x: column, y: row });
+    leftSide.push({ x: columns[0], y: row });
+    rightSide.push({ x: columns[columns.length - 1], y: row });
+
+    if (row === rowCount - 1) {
+      columns.forEach((column) => bottomSide.push({ x: column, y: row }));
+    }
+  }
+
+  return [...leftSide, ...bottomSide.slice(1, -1), ...rightSide.reverse()];
+}
+
+function createTriangleSpinePath(columnCount: number, rowCount: number) {
+  const path: GridCoordinate[] = [];
+  const centerColumn = Math.floor(columnCount / 2);
+
+  for (let row = 0; row < rowCount; row += 1) {
+    if (isTriangleGridCoordinate(centerColumn, row, columnCount, rowCount)) {
+      path.push({ x: centerColumn, y: row });
     }
   }
 
   return path;
 }
 
-function createPerimeterPath(columnCount: number, rowCount: number) {
-  const path: GridCoordinate[] = [];
+function getTriangleSnakeOrder(
+  x: number,
+  y: number,
+  columnCount: number,
+  rowCount: number,
+) {
+  let order = 0;
 
-  for (let column = 0; column < columnCount; column += 1) {
-    path.push({ x: column, y: 0 });
-  }
-  for (let row = 1; row < rowCount; row += 1) {
-    path.push({ x: columnCount - 1, y: row });
-  }
-  for (let column = columnCount - 2; column >= 0; column -= 1) {
-    path.push({ x: column, y: rowCount - 1 });
-  }
-  for (let row = rowCount - 2; row > 0; row -= 1) {
-    path.push({ x: 0, y: row });
+  for (let row = 0; row < y; row += 1) {
+    order += getTriangleRowColumns(row, columnCount, rowCount).length;
   }
 
-  return path;
+  const columns = getTriangleRowColumns(y, columnCount, rowCount);
+  const rowOrder =
+    y % 2 === 0 ? columns.indexOf(x) : [...columns].reverse().indexOf(x);
+
+  return rowOrder < 0 ? 0 : order + rowOrder;
 }
 
-function createDiagonalPath(columnCount: number, rowCount: number) {
-  const path: GridCoordinate[] = [];
-
-  for (let diagonal = 0; diagonal < columnCount + rowCount - 1; diagonal += 1) {
-    for (let row = 0; row < rowCount; row += 1) {
-      const column = diagonal - row;
-
-      if (column >= 0 && column < columnCount) {
-        path.push({ x: column, y: row });
-      }
-    }
-  }
-
-  return path;
-}
+const triangleGridItemCount = createTriangleRowsPath(
+  voiceGridSize,
+  voiceGridSize,
+).length;
 
 function createConnectingPath(columnCount: number, rowCount: number) {
   const pause = Array.from({ length: 6 }, () => ({ x: -1, y: -1 }));
 
   return [
-    ...createSerpentinePath(columnCount, rowCount),
+    ...createTriangleRowsPath(columnCount, rowCount).reverse(),
     ...pause,
-    ...createPerimeterPath(columnCount, rowCount),
+    ...createTrianglePerimeterPath(columnCount, rowCount),
     ...pause,
-    ...createDiagonalPath(columnCount, rowCount),
+    ...createTriangleSpinePath(columnCount, rowCount),
     ...pause,
   ];
 }
@@ -306,36 +387,105 @@ function useLiveKitPattern(state: VoiceGridState, interval = 210) {
   };
 }
 
-function ShimmerBorder({ enabled }: { enabled: boolean }) {
-  const shimmerLines = [
-    "animate-[lk-shimmer-quad-top_4s_ease-in-out_infinite]",
-    "animate-[lk-shimmer-quad-right_4s_ease-in-out_infinite]",
-    "animate-[lk-shimmer-quad-bottom_4s_ease-in-out_infinite]",
-    "animate-[lk-shimmer-quad-left_4s_ease-in-out_infinite]",
-  ];
-
+function TriangleSurface() {
   return (
     <span
       aria-hidden="true"
-      className="absolute -inset-1 z-[-1] overflow-hidden bg-white/12"
-      style={{ borderRadius: 8 }}
+      className="absolute -inset-1 z-[-1] overflow-hidden bg-cyan-200/[0.035]"
+      style={{ clipPath: ROUNDED_TRIANGLE_CLIP_PATH }}
     >
-      {enabled
-        ? shimmerLines.map((className) => (
-            <span
-              key={className}
-              className={cn("absolute z-0 rounded-full bg-[#1fd5f9]", className)}
-              style={{
-                width: 35,
-                height: 35,
-                transform: "translate(-50%, -50%)",
-                filter: "blur(17.5px)",
-              }}
-            />
-          ))
-        : null}
-      <span className="absolute bg-[#030303]" style={{ inset: 1.5, borderRadius: 6.5 }} />
+      <span className="lk-triangle-surface-glow absolute inset-0" />
+      <span
+        className="absolute bg-[#030303]"
+        style={{ clipPath: ROUNDED_TRIANGLE_CLIP_PATH, inset: 2 }}
+      />
+      <span className="lk-triangle-surface-sheen absolute inset-0" />
     </span>
+  );
+}
+
+function TriangleFrame() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="pointer-events-none absolute -inset-1 z-20 overflow-visible"
+      viewBox="0 0 100 100"
+    >
+      <path className="lk-triangle-fill" d={ROUNDED_TRIANGLE_PATH} />
+      <path
+        className="lk-triangle-outer-glow"
+        d={ROUNDED_TRIANGLE_PATH}
+        fill="none"
+        pathLength="100"
+        vectorEffect="non-scaling-stroke"
+      />
+      <path
+        className="lk-triangle-frame"
+        d={ROUNDED_TRIANGLE_PATH}
+        fill="none"
+        pathLength="100"
+        vectorEffect="non-scaling-stroke"
+      />
+      <path
+        className="lk-triangle-hairline"
+        d={ROUNDED_TRIANGLE_PATH}
+        fill="none"
+        pathLength="100"
+        vectorEffect="non-scaling-stroke"
+      />
+      <path
+        className="lk-triangle-echo lk-triangle-echo-a"
+        d={ROUNDED_TRIANGLE_PATH}
+        fill="none"
+        pathLength="100"
+        vectorEffect="non-scaling-stroke"
+      />
+      <path
+        className="lk-triangle-echo lk-triangle-echo-b"
+        d={ROUNDED_TRIANGLE_PATH}
+        fill="none"
+        pathLength="100"
+        vectorEffect="non-scaling-stroke"
+      />
+      <path
+        className="lk-triangle-trace"
+        d={ROUNDED_TRIANGLE_PATH}
+        fill="none"
+        pathLength="100"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+}
+
+function CrownFrame() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="pointer-events-none absolute left-[46.5%] top-[-40%] z-[24] h-[82%] w-[82%] overflow-visible opacity-100"
+      viewBox="0 0 100 100"
+      style={{
+        transform: "translateX(-50%) rotate(-14deg)",
+        transformOrigin: "50% 68%",
+      }}
+    >
+      <path
+        className="lk-crown-fill"
+        d={`${CROWN_PRIMARY_PATH} ${CROWN_BASE_PATH}`}
+        fillRule="evenodd"
+      />
+      <path
+        className="lk-crown-track"
+        d={`${CROWN_PRIMARY_PATH} ${CROWN_BASE_PATH}`}
+        pathLength="100"
+      />
+      <path
+        className="lk-crown-line"
+        d={`${CROWN_PRIMARY_PATH} ${CROWN_BASE_PATH}`}
+        pathLength="100"
+      />
+      <path className="lk-crown-inner" d={CROWN_INNER_PATH} pathLength="100" />
+    </svg>
   );
 }
 
@@ -345,6 +495,7 @@ function VoiceSignalSquare({
   contextBridgeActive,
   contextAttached,
   summarizing,
+  bronVoiceLevel,
   voiceLevel,
   onToggle,
 }: {
@@ -353,21 +504,27 @@ function VoiceSignalSquare({
   contextBridgeActive: boolean;
   contextAttached: boolean;
   summarizing: boolean;
+  bronVoiceLevel: number;
   voiceLevel: number;
   onToggle: () => void;
 }) {
-  const state: VoiceGridState = summarizing || connecting || !active ? "connecting" : "listening";
-  const { path: signalPath, step: signalStep } = useLiveKitPattern(state, summarizing ? 96 : state === "connecting" ? 210 : 120);
+  const state: VoiceGridState =
+    summarizing || connecting || !active ? "connecting" : "listening";
+  const { path: signalPath, step: signalStep } = useLiveKitPattern(
+    state,
+    summarizing ? 64 : state === "connecting" ? 48 : 96,
+  );
   const gridRef = useRef<HTMLSpanElement>(null);
-  const [pointerCoordinate, setPointerCoordinate] = useState<GridCoordinate | null>(null);
-  const [cursorPosition, setCursorPosition] = useState<CursorPosition | null>(null);
-  const [isCursorInside, setIsCursorInside] = useState(false);
+  const [pointerCoordinate, setPointerCoordinate] =
+    useState<GridCoordinate | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const clickPulseTimerRef = useRef<number | null>(null);
   const [isClickPulseActive, setIsClickPulseActive] = useState(false);
   const [clickBurst, setClickBurst] = useState(0);
   const center = (voiceGridSize - 1) / 2;
-  const activeRadius = 1.1 + voiceLevel * 5.4;
+  const combinedVoiceLevel = Math.max(voiceLevel, bronVoiceLevel);
+  const bronPulse = active && bronVoiceLevel > 0.025 ? bronVoiceLevel : 0;
+  const activeRadius = 1.1 + combinedVoiceLevel * 5.4;
   const haloRadius = activeRadius + 1.8;
   const scanTrail = useMemo(() => {
     const trail = new Map<number, number>();
@@ -379,13 +536,22 @@ function VoiceSignalSquare({
     let previousCoordinate: GridCoordinate | null = null;
 
     for (let offset = 0; offset < 10; offset += 1) {
-      const coordinate = signalPath[(signalStep - offset + signalPath.length) % signalPath.length];
+      const coordinate =
+        signalPath[
+          (signalStep - offset + signalPath.length) % signalPath.length
+        ];
 
       if (!coordinate || coordinate.x < 0 || coordinate.y < 0) {
         break;
       }
 
-      if (previousCoordinate && Math.hypot(coordinate.x - previousCoordinate.x, coordinate.y - previousCoordinate.y) > 1.5) {
+      if (
+        previousCoordinate &&
+        Math.hypot(
+          coordinate.x - previousCoordinate.x,
+          coordinate.y - previousCoordinate.y,
+        ) > 1.5
+      ) {
         break;
       }
 
@@ -404,8 +570,6 @@ function VoiceSignalSquare({
       return false;
     }
 
-    const cursorX = ((event.clientX - rect.left) / rect.width) * 100;
-    const cursorY = ((event.clientY - rect.top) / rect.height) * 100;
     const isInsideGrid =
       event.clientX >= rect.left &&
       event.clientX <= rect.right &&
@@ -414,15 +578,24 @@ function VoiceSignalSquare({
 
     if (!isInsideGrid) {
       setPointerCoordinate(null);
-      setIsCursorInside(false);
       return false;
     }
 
-    const x = Math.max(0, Math.min(voiceGridSize - 1, Math.floor(((event.clientX - rect.left) / rect.width) * voiceGridSize)));
-    const y = Math.max(0, Math.min(voiceGridSize - 1, Math.floor(((event.clientY - rect.top) / rect.height) * voiceGridSize)));
+    const x = Math.max(
+      0,
+      Math.min(
+        voiceGridSize - 1,
+        Math.floor(((event.clientX - rect.left) / rect.width) * voiceGridSize),
+      ),
+    );
+    const y = Math.max(
+      0,
+      Math.min(
+        voiceGridSize - 1,
+        Math.floor(((event.clientY - rect.top) / rect.height) * voiceGridSize),
+      ),
+    );
     setPointerCoordinate({ x, y });
-    setCursorPosition({ x: cursorX, y: cursorY });
-    setIsCursorInside(true);
 
     return true;
   }
@@ -457,7 +630,8 @@ function VoiceSignalSquare({
     };
   }, []);
 
-  const shouldShowConnectionPulse = summarizing || connecting || isClickPulseActive;
+  const shouldShowConnectionPulse =
+    summarizing || connecting || isClickPulseActive;
 
   return (
     <div className="relative grid w-full place-items-center py-10 sm:py-12">
@@ -469,17 +643,20 @@ function VoiceSignalSquare({
         <span
           aria-hidden="true"
           className="absolute left-1/2 top-1/2 z-[-2] h-[22rem] w-[min(84rem,calc(100vw-1rem))] -translate-x-1/2 -translate-y-1/2 overflow-hidden opacity-95 transition-opacity duration-300 [mask-image:linear-gradient(90deg,transparent_0%,black_8%,black_92%,transparent_100%)] sm:h-[30rem]"
+          style={{ "--lk-bron-level": bronPulse } as CSSProperties}
         >
           <span className="absolute left-1/2 top-1/2 grid -translate-x-1/2 -translate-y-1/2 gap-[7px] [mask-image:radial-gradient(ellipse_at_center,black_0%,black_50%,transparent_86%)]">
             <span
               className="grid gap-x-[6px] gap-y-[7px]"
-              style={{ gridTemplateColumns: `repeat(${ambientPixelColumns}, 2px)` }}
+              style={{
+                gridTemplateColumns: `repeat(${ambientPixelColumns}, 3px)`,
+              }}
             >
               {ambientPixels.map((pixel, index) => (
                 <span
                   key={index}
                   className={cn(
-                    "size-0.5 bg-white",
+                    "size-[3px] bg-white [clip-path:polygon(50%_0%,0%_100%,100%_100%)]",
                     pixel.isVisible
                       ? "animate-[lk-ambient-star_var(--lk-star-duration)_ease-in-out_var(--lk-star-delay)_infinite]"
                       : "opacity-0",
@@ -493,6 +670,7 @@ function VoiceSignalSquare({
                       "--lk-star-delay": `${pixel.animationDelay}s`,
                       "--lk-star-dim": pixel.dimOpacity,
                       "--lk-star-duration": `${pixel.animationDuration}s`,
+                      "--lk-star-angle": `${pixel.rotation}deg`,
                     } as CSSProperties
                   }
                 />
@@ -506,14 +684,22 @@ function VoiceSignalSquare({
           disabled={summarizing}
           data-voice-square="true"
           aria-pressed={active}
-          aria-label={summarizing ? "Summarizing task" : active ? "End voice conversation" : "Start voice conversation"}
+          aria-label={
+            summarizing
+              ? "Summarizing task"
+              : active
+                ? "End voice conversation"
+                : "Start voice conversation"
+          }
+          style={{ "--lk-bron-level": bronPulse } as CSSProperties}
           className={cn(
-            "group/signal relative cursor-pointer rounded-lg bg-[#030303] p-0 outline-none transition-[box-shadow] duration-200",
+            "group/signal relative cursor-pointer bg-transparent p-0 outline-none transition-[filter] duration-200",
             "focus-visible:ring-3 focus-visible:ring-cyan-300/35",
             summarizing || active || connecting
-              ? "shadow-[0_0_0_1px_rgba(31,213,249,0.28),0_0_30px_rgba(31,213,249,0.12)]"
-              : "shadow-none",
-            summarizing && "cursor-default shadow-[0_0_0_1px_rgba(31,213,249,0.42),0_0_44px_rgba(31,213,249,0.2)]",
+              ? "drop-shadow-[0_0_30px_rgba(31,213,249,0.16)]"
+              : "drop-shadow-none",
+            summarizing &&
+              "cursor-default drop-shadow-[0_0_44px_rgba(31,213,249,0.24)]",
           )}
           onPointerDown={(event) => {
             if (!updatePointerCoordinate(event)) {
@@ -527,7 +713,6 @@ function VoiceSignalSquare({
           onPointerLeave={() => {
             if (!isDragging) {
               setPointerCoordinate(null);
-              setIsCursorInside(false);
             }
           }}
           onPointerMove={updatePointerCoordinate}
@@ -542,7 +727,6 @@ function VoiceSignalSquare({
           onPointerCancel={(event) => {
             setIsDragging(false);
             setPointerCoordinate(null);
-            setIsCursorInside(false);
 
             if (event.currentTarget.hasPointerCapture(event.pointerId)) {
               event.currentTarget.releasePointerCapture(event.pointerId);
@@ -552,20 +736,29 @@ function VoiceSignalSquare({
           onMouseLeave={() => {
             if (!isDragging) {
               setPointerCoordinate(null);
-              setIsCursorInside(false);
             }
           }}
           onMouseMove={updatePointerCoordinate}
         >
-          <ShimmerBorder enabled />
+          <TriangleSurface />
+          <TriangleFrame />
+          <CrownFrame />
           {summarizing ? (
             <svg
               aria-hidden="true"
               className="lk-loading-snake"
               viewBox="0 0 100 100"
             >
-              <rect className="lk-loading-snake-track" x="2" y="2" width="96" height="96" rx="4" pathLength="100" />
-              <rect className="lk-loading-snake-line" x="2" y="2" width="96" height="96" rx="4" pathLength="100" />
+              <path
+                className="lk-loading-snake-track"
+                d={ROUNDED_TRIANGLE_PATH}
+                pathLength="100"
+              />
+              <path
+                className="lk-loading-snake-line"
+                d={ROUNDED_TRIANGLE_PATH}
+                pathLength="100"
+              />
             </svg>
           ) : null}
           {shouldShowConnectionPulse ? (
@@ -573,11 +766,12 @@ function VoiceSignalSquare({
               key={clickBurst}
               aria-hidden="true"
               className={cn(
-                "pointer-events-none absolute -inset-2 z-20 rounded-[10px] border border-transparent",
+                "pointer-events-none absolute -inset-2 z-20 border border-transparent",
                 connecting || summarizing
                   ? "animate-[lk-square-side-flash_2s_ease-in-out_infinite]"
                   : "animate-[lk-square-side-flash_2s_ease-out_1]",
               )}
+              style={{ clipPath: ROUNDED_TRIANGLE_CLIP_PATH }}
             />
           ) : null}
           {contextBridgeActive ? (
@@ -601,49 +795,110 @@ function VoiceSignalSquare({
             </span>
           ) : null}
           <span
-            aria-hidden="true"
-            className={cn(
-              "pointer-events-none absolute inset-[1.5px] z-0 rounded-[6.5px] opacity-0 transition-opacity duration-150",
-              isCursorInside && "opacity-100",
-              isDragging && "duration-75",
-            )}
-            style={
-              {
-                "--lk-cursor-x": `${cursorPosition?.x ?? 50}%`,
-                "--lk-cursor-y": `${cursorPosition?.y ?? 50}%`,
-                background:
-                  "radial-gradient(circle at var(--lk-cursor-x) var(--lk-cursor-y), rgba(255,255,255,0.12) 0%, rgba(31,213,249,0.1) 14%, transparent 42%)",
-              } as CSSProperties
-            }
-          />
-          <span
             ref={gridRef}
             aria-hidden="true"
             className="relative z-10 m-4 grid aspect-square gap-[10px] sm:m-5 sm:gap-[14px]"
-            style={{ gridTemplateColumns: `repeat(${voiceGridSize}, 1fr)` }}
+            style={{
+              clipPath: ROUNDED_TRIANGLE_CLIP_PATH,
+              gridTemplateColumns: `repeat(${voiceGridSize}, 1fr)`,
+            }}
           >
             {voiceGridItems.map((index) => {
               const x = index % voiceGridSize;
               const y = Math.floor(index / voiceGridSize);
-              const snakeOrder = x % 2 === 0 ? x * voiceGridSize + y : x * voiceGridSize + (voiceGridSize - 1 - y);
-              const snakeDuration = 28;
+              const isInTriangle = isTriangleGridCoordinate(
+                x,
+                y,
+                voiceGridSize,
+                voiceGridSize,
+              );
+              const snakeOrder = getTriangleSnakeOrder(
+                x,
+                y,
+                voiceGridSize,
+                voiceGridSize,
+              );
+              const snakeDuration = 4;
               const distanceFromCenter = Math.hypot(x - center, y - center);
               const scanIntensity = scanTrail.get(index) ?? 0;
               const pointerDistance =
-                pointerCoordinate === null ? Number.POSITIVE_INFINITY : Math.hypot(x - pointerCoordinate.x, y - pointerCoordinate.y);
+                pointerCoordinate === null
+                  ? Number.POSITIVE_INFINITY
+                  : Math.hypot(
+                      x - pointerCoordinate.x,
+                      y - pointerCoordinate.y,
+                    );
               const pointerIntensity =
                 pointerCoordinate === null
                   ? 0
-                  : Math.max(0, Math.min(1, ((isDragging ? 4.6 : 3.1) - pointerDistance) / (isDragging ? 4.6 : 3.1)));
+                  : Math.max(
+                      0,
+                      Math.min(
+                        1,
+                        ((isDragging ? 4.6 : 3.1) - pointerDistance) /
+                          (isDragging ? 4.6 : 3.1),
+                      ),
+                    );
+              const pointerDirectionX =
+                pointerCoordinate !== null && pointerDistance > 0
+                  ? (x - pointerCoordinate.x) / pointerDistance
+                  : 0;
+              const pointerDirectionY =
+                pointerCoordinate !== null && pointerDistance > 0
+                  ? (y - pointerCoordinate.y) / pointerDistance
+                  : 0;
+              const pointerAngle =
+                pointerCoordinate === null || pointerDistance === 0
+                  ? (x + y) % 2 === 0
+                    ? 0
+                    : 180
+                  : Math.atan2(pointerDirectionY, pointerDirectionX) *
+                      (180 / Math.PI) +
+                    90;
               const voiceIntensity =
                 active && !connecting
-                  ? Math.max(0, Math.min(1, (haloRadius - distanceFromCenter) / Math.max(haloRadius, 1)))
+                  ? Math.max(
+                      0,
+                      Math.min(
+                        1,
+                        (haloRadius - distanceFromCenter) /
+                          Math.max(haloRadius, 1),
+                      ),
+                    )
                   : 0;
-              const totalIntensity = Math.max(scanIntensity, voiceIntensity, pointerIntensity);
+              const totalIntensity = Math.max(
+                scanIntensity,
+                voiceIntensity,
+                pointerIntensity,
+              );
               const isScanning = scanIntensity > 0;
               const isVoiceLit = voiceIntensity > 0.08;
               const isPointerLit = pointerIntensity > 0.05;
-              const scale = totalIntensity > 0 ? 1 + totalIntensity * (isDragging ? 1.45 : 0.9) : undefined;
+              const scale =
+                totalIntensity > 0
+                  ? 1 + totalIntensity * (isDragging ? 1.45 : 0.9)
+                  : undefined;
+              const trianglePixelClipPath =
+                (x + y) % 2 === 0
+                  ? "polygon(50% 0%, 100% 100%, 0% 100%)"
+                  : "polygon(0% 0%, 100% 0%, 50% 100%)";
+              const bottomToTopSnakeOrder = triangleGridItemCount - 1 - snakeOrder;
+              const pointerDrift = pointerIntensity * (isDragging ? 5.2 : 3.2);
+              const pointerFan =
+                pointerIntensity * ((x + y) % 2 === 0 ? 16 : -16);
+              const pointerTilt = pointerIntensity * (pointerDirectionX * 8);
+              const transform = [
+                pointerIntensity > 0
+                  ? `translate(${pointerDirectionX * pointerDrift}px, ${pointerDirectionY * pointerDrift}px)`
+                  : null,
+                pointerIntensity > 0
+                  ? `rotate(${pointerAngle + pointerFan}deg)`
+                  : null,
+                pointerIntensity > 0 ? `skewX(${pointerTilt}deg)` : null,
+                scale ? `scale(${scale})` : null,
+              ]
+                .filter(Boolean)
+                .join(" ");
 
               return (
                 <span
@@ -651,21 +906,26 @@ function VoiceSignalSquare({
                   data-lk-index={index}
                   data-lk-highlighted={isScanning || isVoiceLit || isPointerLit}
                   className={cn(
-                    "size-1 rounded-none bg-white/[0.11] transition-all ease-out group-hover/signal:bg-white/[0.22] group-hover/signal:shadow-[0px_0px_8px_1px_rgba(255,255,255,0.12)] group-active:scale-125 sm:size-[4.5px]",
+                    "size-[5px] bg-white/[0.11] transition-all ease-out group-hover/signal:bg-white/[0.22] group-hover/signal:drop-shadow-[0_0_6px_rgba(255,255,255,0.18)] group-active:scale-125 sm:size-[5.5px]",
+                    !isInTriangle && "invisible",
                     state === "connecting" &&
+                      !isPointerLit &&
                       "animate-[lk-square-snake_var(--lk-snake-duration)_linear_var(--lk-snake-delay)_infinite]",
                     isScanning &&
-                      "scale-125 bg-[#1fd5f9] shadow-[0px_0px_6.8px_2px_rgba(31,213,249,0.2)]",
-                    isVoiceLit && "bg-[#1fd5f9] shadow-[0px_0px_8px_2px_rgba(31,213,249,0.18)]",
-                    isPointerLit && "bg-white shadow-[0px_0px_8px_2px_rgba(255,255,255,0.16)]",
+                      "scale-125 bg-[#1fd5f9] drop-shadow-[0_0_6px_rgba(31,213,249,0.42)]",
+                    isVoiceLit &&
+                      "bg-[#1fd5f9] drop-shadow-[0_0_7px_rgba(31,213,249,0.38)]",
+                    isPointerLit &&
+                      "bg-white drop-shadow-[0_0_7px_rgba(255,255,255,0.34)]",
                   )}
                   style={
                     {
-                      transform: scale ? `scale(${scale})` : undefined,
-                      "--lk-snake-delay": `${-(snakeOrder / voiceGridItems.length) * snakeDuration}s`,
+                      clipPath: trianglePixelClipPath,
+                      transform: transform.length > 0 ? transform : undefined,
+                      "--lk-snake-delay": `${-(bottomToTopSnakeOrder / triangleGridItemCount) * snakeDuration}s`,
                       "--lk-snake-duration": `${snakeDuration}s`,
                       transitionProperty: "all",
-                      transitionDuration: `${isDragging ? 40 : active && !connecting ? 70 : 160}ms`,
+                      transitionDuration: `${isDragging ? 24 : isPointerLit ? 36 : active && !connecting ? 48 : 95}ms`,
                       transitionTimingFunction: "ease-out",
                     } as CSSProperties
                   }
@@ -689,9 +949,15 @@ export function SpeechInputWorkbench() {
   const micAnalyserRef = useRef<AudioAnalyserHandle | null>(null);
   const micAnalyserFrameRef = useRef<number | null>(null);
   const micLevelRef = useRef(0);
+  const bronAnalyserRef = useRef<AudioAnalyserHandle | null>(null);
+  const bronAnalyserFrameRef = useRef<number | null>(null);
+  const bronAudioTrackIdRef = useRef<string | null>(null);
+  const bronVoiceLevelRef = useRef(0);
   const remoteAudioElementsRef = useRef<HTMLMediaElement[]>([]);
   const attachedAudioTrackIdsRef = useRef<Set<string>>(new Set());
-  const conversationRef = useRef<ConversationMessage[]>(loadStoredConversationMessages());
+  const conversationRef = useRef<ConversationMessage[]>(
+    loadStoredConversationMessages(),
+  );
   const spokenInputRef = useRef("");
   const isSummarizingRef = useRef(false);
   const hasStartedRoutingRef = useRef(false);
@@ -701,6 +967,7 @@ export function SpeechInputWorkbench() {
   const [isConnectingVoice, setIsConnectingVoice] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
+  const [bronVoiceLevel, setBronVoiceLevel] = useState(0);
   const [, setVoiceResponse] = useState("");
   const hasDataInput = fileName.length > 0;
   const shouldShowDatasetUpload = isDatasetUploadPrompted || hasDataInput;
@@ -725,7 +992,10 @@ export function SpeechInputWorkbench() {
     const currentConversation = conversationRef.current;
     const lastMessage = currentConversation.at(-1);
 
-    if (lastMessage?.role === message.role && lastMessage.content === message.content) {
+    if (
+      lastMessage?.role === message.role &&
+      lastMessage.content === message.content
+    ) {
       return;
     }
 
@@ -767,6 +1037,7 @@ export function SpeechInputWorkbench() {
     remoteAudioElementsRef.current.forEach((element) => element.remove());
     remoteAudioElementsRef.current = [];
     attachedAudioTrackIdsRef.current.clear();
+    stopBronAnalyser();
   }
 
   function stopMicAnalyser() {
@@ -779,6 +1050,64 @@ export function SpeechInputWorkbench() {
     micAnalyserRef.current = null;
     micLevelRef.current = 0;
     setMicLevel(0);
+  }
+
+  function stopBronAnalyser(trackId?: string) {
+    if (trackId && bronAudioTrackIdRef.current !== trackId) {
+      return;
+    }
+
+    if (bronAnalyserFrameRef.current !== null) {
+      window.cancelAnimationFrame(bronAnalyserFrameRef.current);
+      bronAnalyserFrameRef.current = null;
+    }
+
+    void bronAnalyserRef.current?.cleanup().catch(() => undefined);
+    bronAnalyserRef.current = null;
+    bronAudioTrackIdRef.current = null;
+    bronVoiceLevelRef.current = 0;
+    setBronVoiceLevel(0);
+  }
+
+  function startBronAnalyser(track: RemoteAudioTrack, trackId: string) {
+    stopBronAnalyser();
+
+    try {
+      const analyser = createAudioAnalyser(track, {
+        fftSize: 1024,
+        smoothingTimeConstant: 0.54,
+        minDecibels: -90,
+        maxDecibels: -16,
+      });
+
+      bronAnalyserRef.current = analyser;
+      bronAudioTrackIdRef.current = trackId;
+
+      const readBronLevel = () => {
+        const rawLevel = analyser.calculateVolume();
+        const nextLevel = Math.max(0, Math.min(1, (rawLevel - 0.012) * 9.4));
+        const smoothedLevel =
+          bronVoiceLevelRef.current * 0.58 + nextLevel * 0.42;
+
+        if (
+          Math.abs(smoothedLevel - bronVoiceLevelRef.current) > 0.012 ||
+          smoothedLevel < 0.008
+        ) {
+          bronVoiceLevelRef.current = smoothedLevel;
+          setBronVoiceLevel(smoothedLevel < 0.008 ? 0 : smoothedLevel);
+        } else {
+          bronVoiceLevelRef.current = smoothedLevel;
+        }
+
+        bronAnalyserFrameRef.current =
+          window.requestAnimationFrame(readBronLevel);
+      };
+
+      bronAnalyserFrameRef.current =
+        window.requestAnimationFrame(readBronLevel);
+    } catch {
+      stopBronAnalyser(trackId);
+    }
   }
 
   function startMicAnalyser(track?: LocalAudioTrack) {
@@ -803,14 +1132,18 @@ export function SpeechInputWorkbench() {
         const nextLevel = Math.max(0, Math.min(1, (rawLevel - 0.018) * 7.5));
         const smoothedLevel = micLevelRef.current * 0.68 + nextLevel * 0.32;
 
-        if (Math.abs(smoothedLevel - micLevelRef.current) > 0.015 || smoothedLevel < 0.01) {
+        if (
+          Math.abs(smoothedLevel - micLevelRef.current) > 0.015 ||
+          smoothedLevel < 0.01
+        ) {
           micLevelRef.current = smoothedLevel;
           setMicLevel(smoothedLevel < 0.01 ? 0 : smoothedLevel);
         } else {
           micLevelRef.current = smoothedLevel;
         }
 
-        micAnalyserFrameRef.current = window.requestAnimationFrame(readMicLevel);
+        micAnalyserFrameRef.current =
+          window.requestAnimationFrame(readMicLevel);
       };
 
       micAnalyserFrameRef.current = window.requestAnimationFrame(readMicLevel);
@@ -828,7 +1161,10 @@ export function SpeechInputWorkbench() {
       stopMicAnalyser();
       remoteAudioElementsRef.current.forEach((element) => element.remove());
       remoteAudioElementsRef.current = [];
-      void room?.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+      stopBronAnalyser();
+      void room?.localParticipant
+        .setMicrophoneEnabled(false)
+        .catch(() => undefined);
       room?.disconnect();
 
       if (responseTimerRef.current) {
@@ -882,7 +1218,9 @@ export function SpeechInputWorkbench() {
         resolve();
       };
 
-      const handleLocalTrackPublished = (publication: { kind?: Track.Kind }) => {
+      const handleLocalTrackPublished = (publication: {
+        kind?: Track.Kind;
+      }) => {
         if (publication.kind === Track.Kind.Audio) {
           finish();
         }
@@ -907,7 +1245,9 @@ export function SpeechInputWorkbench() {
       return;
     }
 
-    await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+    await room.localParticipant
+      .setMicrophoneEnabled(false)
+      .catch(() => undefined);
     room.disconnect();
   }
 
@@ -965,25 +1305,42 @@ export function SpeechInputWorkbench() {
     element.style.opacity = "0";
     element.style.pointerEvents = "none";
     document.body.appendChild(element);
-    remoteAudioElementsRef.current = [...remoteAudioElementsRef.current, element];
+    remoteAudioElementsRef.current = [
+      ...remoteAudioElementsRef.current,
+      element,
+    ];
+
+    if (!participant || !participant.identity.startsWith("speaker-")) {
+      startBronAnalyser(audioTrack, trackId);
+    }
 
     void liveKitRoomRef.current
       ?.startAudio()
       .then(() => element.play())
       .catch(() => {
-        showTemporaryResponse("Audio is blocked. Click the voice button again to resume playback.");
+        showTemporaryResponse(
+          "Audio is blocked. Click the voice button again to resume playback.",
+        );
       });
   }
 
   function handleTrackUnsubscribed(track: RemoteTrack) {
-    attachedAudioTrackIdsRef.current.delete(track.sid ?? track.mediaStreamTrack.id);
+    const trackId = track.sid ?? track.mediaStreamTrack.id;
+    attachedAudioTrackIdsRef.current.delete(trackId);
+    stopBronAnalyser(trackId);
     track.detach().forEach((element) => {
       element.remove();
-      remoteAudioElementsRef.current = remoteAudioElementsRef.current.filter((audio) => audio !== element);
+      remoteAudioElementsRef.current = remoteAudioElementsRef.current.filter(
+        (audio) => audio !== element,
+      );
     });
   }
 
-  function handleTranscriptText(identity: string, text: string, isFinal: boolean) {
+  function handleTranscriptText(
+    identity: string,
+    text: string,
+    isFinal: boolean,
+  ) {
     const transcript = text.trim();
 
     if (transcript.length === 0) {
@@ -1009,7 +1366,9 @@ export function SpeechInputWorkbench() {
     }
   }
 
-  async function handleCustomDatasetUploadStream(reader: AsyncIterable<string>) {
+  async function handleCustomDatasetUploadStream(
+    reader: AsyncIterable<string>,
+  ) {
     for await (const chunk of reader) {
       if (chunk.length > 0) {
         continue;
@@ -1043,10 +1402,13 @@ export function SpeechInputWorkbench() {
   }
 
   async function handleTranscriptionStream(
-    reader: AsyncIterable<string> & { info: { attributes?: Record<string, string> } },
+    reader: AsyncIterable<string> & {
+      info: { attributes?: Record<string, string> };
+    },
     identity: string,
   ) {
-    const isFinal = reader.info.attributes?.[TRANSCRIPTION_FINAL_ATTRIBUTE] === "true";
+    const isFinal =
+      reader.info.attributes?.[TRANSCRIPTION_FINAL_ATTRIBUTE] === "true";
     let latestText = "";
 
     for await (const chunk of reader) {
@@ -1081,11 +1443,19 @@ export function SpeechInputWorkbench() {
 
       liveKitRoomRef.current = room;
       void room.startAudio().catch(() => undefined);
-      room.registerTextStreamHandler(TRANSCRIPTION_TOPIC, (reader, participantInfo) => {
-        void handleTranscriptionStream(reader, participantInfo.identity).catch(() => {
-          showTemporaryResponse("Could not read the LiveKit transcript stream.");
-        });
-      });
+      room.registerTextStreamHandler(
+        TRANSCRIPTION_TOPIC,
+        (reader, participantInfo) => {
+          void handleTranscriptionStream(
+            reader,
+            participantInfo.identity,
+          ).catch(() => {
+            showTemporaryResponse(
+              "Could not read the LiveKit transcript stream.",
+            );
+          });
+        },
+      );
       room.registerTextStreamHandler(CUSTOM_DATASET_UPLOAD_TOPIC, (reader) => {
         void handleCustomDatasetUploadStream(reader).catch(() => {
           showDatasetUploadPrompt();
@@ -1093,7 +1463,11 @@ export function SpeechInputWorkbench() {
       });
       room.registerTextStreamHandler(START_AGENT_WORK_TOPIC, (reader) => {
         void handleStartAgentWorkStream(reader).catch((error) => {
-          showTemporaryResponse(error instanceof Error ? error.message : "Could not start agent work.");
+          showTemporaryResponse(
+            error instanceof Error
+              ? error.message
+              : "Could not start agent work.",
+          );
         });
       });
 
@@ -1119,15 +1493,23 @@ export function SpeechInputWorkbench() {
       });
       room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
       room.on(RoomEvent.LocalAudioSilenceDetected, () => {
-        showTemporaryResponse("Your mic is connected, but LiveKit detects silence. Check the input device.");
+        showTemporaryResponse(
+          "Your mic is connected, but LiveKit detects silence. Check the input device.",
+        );
       });
       room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
         if (!room.canPlaybackAudio) {
-          showTemporaryResponse("Audio is blocked. Click the voice button again to resume playback.");
+          showTemporaryResponse(
+            "Audio is blocked. Click the voice button again to resume playback.",
+          );
           return;
         }
 
-        void Promise.all(remoteAudioElementsRef.current.map((element) => element.play().catch(() => undefined)));
+        void Promise.all(
+          remoteAudioElementsRef.current.map((element) =>
+            element.play().catch(() => undefined),
+          ),
+        );
       });
       room.on(RoomEvent.Disconnected, () => {
         liveKitRoomRef.current = null;
@@ -1150,17 +1532,25 @@ export function SpeechInputWorkbench() {
       await room.connect(url, token);
       await room.startAudio();
       const microphoneReady = waitForLocalMicrophone(room);
-      const microphonePublication = await room.localParticipant.setMicrophoneEnabled(true, {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      });
+      const microphonePublication =
+        await room.localParticipant.setMicrophoneEnabled(true, {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        });
       startMicAnalyser(microphonePublication?.audioTrack);
       await microphoneReady;
 
-      if (!Array.from(room.remoteParticipants.values()).some((participant) => !participant.identity.startsWith("speaker-"))) {
+      if (
+        !Array.from(room.remoteParticipants.values()).some(
+          (participant) => !participant.identity.startsWith("speaker-"),
+        )
+      ) {
         agentWaitTimerRef.current = window.setTimeout(() => {
-          showTemporaryResponse("Mic connected, but the voice agent has not joined. Check the dev terminal.", 9000);
+          showTemporaryResponse(
+            "Mic connected, but the voice agent has not joined. Check the dev terminal.",
+            9000,
+          );
         }, 8000);
       }
 
@@ -1195,7 +1585,9 @@ export function SpeechInputWorkbench() {
       setIsListening(false);
       setIsConnectingVoice(false);
       clearAgentWaitTimer();
-      showTemporaryResponse(error instanceof Error ? error.message : "Could not connect LiveKit.");
+      showTemporaryResponse(
+        error instanceof Error ? error.message : "Could not connect LiveKit.",
+      );
     }
   }
 
@@ -1238,7 +1630,9 @@ export function SpeechInputWorkbench() {
       remoteAudioElementsRef.current.forEach((element) => element.remove());
       remoteAudioElementsRef.current = [];
       attachedAudioTrackIdsRef.current.clear();
-      void room?.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+      void room?.localParticipant
+        .setMicrophoneEnabled(false)
+        .catch(() => undefined);
       room?.disconnect();
     }
 
@@ -1275,7 +1669,8 @@ export function SpeechInputWorkbench() {
           : [
               {
                 role: "user" as const,
-                content: latestSpokenIntent || "The user asked Bron to start working.",
+                content:
+                  latestSpokenIntent || "The user asked Bron to start working.",
               },
             ];
       const { summary } = await summarizeMutation.mutateAsync({
@@ -1289,7 +1684,11 @@ export function SpeechInputWorkbench() {
         transitionTypes: ["nav-forward"],
       });
     } catch (error) {
-      showTemporaryResponse(error instanceof Error ? error.message : "Could not summarize conversation.");
+      showTemporaryResponse(
+        error instanceof Error
+          ? error.message
+          : "Could not summarize conversation.",
+      );
       isSummarizingRef.current = false;
       hasStartedRoutingRef.current = false;
       setIsSummarizing(false);
@@ -1305,7 +1704,8 @@ export function SpeechInputWorkbench() {
           backgroundImage:
             "linear-gradient(rgba(255,255,255,0.032) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.032) 1px, transparent 1px)",
           backgroundSize: "40px 40px",
-          maskImage: "radial-gradient(circle at center, black 0%, black 54%, transparent 100%)",
+          maskImage:
+            "radial-gradient(circle at center, black 0%, black 54%, transparent 100%)",
         }}
       />
       {isSummarizing ? (
@@ -1343,6 +1743,7 @@ export function SpeechInputWorkbench() {
               contextAttached={hasDataInput}
               contextBridgeActive={shouldShowDatasetUpload}
               summarizing={isSummarizing}
+              bronVoiceLevel={bronVoiceLevel}
               voiceLevel={micLevel}
               onToggle={startSpeechInput}
             />
@@ -1350,10 +1751,10 @@ export function SpeechInputWorkbench() {
             <span
               aria-hidden="true"
               className={cn(
-                "pointer-events-none absolute left-1/2 top-[calc(50%+6.1rem)] z-[55] h-[6.35rem] w-28 -translate-x-1/2 transition-all duration-300 ease-out sm:top-[calc(50%+6.9rem)]",
+                "pointer-events-none absolute left-1/2 top-[calc(50%+6.1rem)] z-[55] h-[6.35rem] w-28 -translate-x-1/2 origin-bottom transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] sm:top-[calc(50%+6.9rem)]",
                 shouldShowDatasetUpload
-                  ? "translate-y-0 opacity-100"
-                  : "pointer-events-none -translate-y-8 opacity-0",
+                  ? "translate-y-0 scale-100 opacity-100"
+                  : "translate-y-7 scale-95 opacity-0",
               )}
             >
               <span
@@ -1367,17 +1768,13 @@ export function SpeechInputWorkbench() {
               <span
                 className={cn(
                   "absolute left-1/2 top-2 h-[4.75rem] w-[5.9rem] -translate-x-1/2 rounded-b-md border border-t-0 bg-[#040607]/88 shadow-[0_20px_44px_rgba(0,0,0,0.34),inset_0_-1px_0_rgba(255,255,255,0.045)]",
-                  hasDataInput
-                    ? "border-[#c9aa72]/24"
-                    : "border-cyan-200/16",
+                  hasDataInput ? "border-[#c9aa72]/24" : "border-cyan-200/16",
                 )}
               />
               <span
                 className={cn(
                   "absolute left-1/2 top-[1.15rem] h-[3.75rem] w-[2.6rem] -translate-x-1/2 rounded-b-sm border-x",
-                  hasDataInput
-                    ? "border-[#c9aa72]/22"
-                    : "border-cyan-200/14",
+                  hasDataInput ? "border-[#c9aa72]/22" : "border-cyan-200/14",
                 )}
               />
               <span
@@ -1392,35 +1789,49 @@ export function SpeechInputWorkbench() {
 
             <div
               className={cn(
-                "absolute left-1/2 top-[calc(50%+7.35rem)] z-[60] -translate-x-1/2 transition-all duration-300 ease-out sm:top-[calc(50%+8.15rem)]",
+                "absolute left-1/2 top-[calc(50%+7.35rem)] z-[60] -translate-x-1/2 origin-bottom transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] sm:top-[calc(50%+8.15rem)]",
                 shouldShowDatasetUpload
-                  ? "translate-y-0 opacity-100"
-                  : "pointer-events-none -translate-y-12 opacity-0",
+                  ? "translate-y-0 scale-100 opacity-100 delay-75"
+                  : "pointer-events-none translate-y-8 scale-95 opacity-0",
               )}
             >
-              {shouldShowDatasetUpload ? (
-                <label
-                  data-dataset-upload="true"
-                  aria-label="Upload data"
+              <label
+                data-dataset-upload="true"
+                aria-hidden={!shouldShowDatasetUpload}
+                aria-label="Upload data"
+                className={cn(
+                  "group/upload relative grid h-12 w-[4.65rem] shrink-0 cursor-pointer place-items-center overflow-hidden rounded-[10px] border border-cyan-200/42 bg-[#061014]/92 text-cyan-50 shadow-[0_12px_28px_rgba(0,0,0,0.38),0_0_24px_rgba(34,211,238,0.13),inset_0_1px_0_rgba(255,255,255,0.11)] transition duration-150 hover:-translate-y-0.5 hover:border-cyan-100/65 hover:bg-[#071820] hover:text-white hover:shadow-[0_14px_32px_rgba(0,0,0,0.42),0_0_28px_rgba(34,211,238,0.18),inset_0_1px_0_rgba(255,255,255,0.16)] active:translate-y-0 focus-within:ring-3 focus-within:ring-cyan-300/24",
+                  hasDataInput
+                    ? "border-[#c9aa72]/58 bg-[#151107]/92 text-[#f3d9a4] shadow-[0_14px_30px_rgba(0,0,0,0.42),0_0_24px_rgba(201,170,114,0.11),inset_0_1px_0_rgba(255,255,255,0.13)] hover:border-[#f0d7a0]/72 hover:bg-[#1b1509] hover:shadow-[0_16px_34px_rgba(0,0,0,0.46),0_0_28px_rgba(201,170,114,0.15),inset_0_1px_0_rgba(255,255,255,0.16)]"
+                    : "",
+                )}
+              >
+                <span
+                  aria-hidden="true"
                   className={cn(
-                    "grid size-12 shrink-0 cursor-pointer place-items-center rounded-md border border-cyan-200/42 bg-[#061014]/92 text-cyan-50 shadow-[0_12px_28px_rgba(0,0,0,0.38),0_0_24px_rgba(34,211,238,0.13),inset_0_1px_0_rgba(255,255,255,0.11)] transition duration-150 hover:-translate-y-0.5 hover:border-cyan-100/65 hover:bg-[#071820] hover:text-white hover:shadow-[0_14px_32px_rgba(0,0,0,0.42),0_0_28px_rgba(34,211,238,0.18),inset_0_1px_0_rgba(255,255,255,0.16)] active:translate-y-0 focus-within:ring-3 focus-within:ring-cyan-300/24",
+                    "absolute inset-x-2 top-1.5 h-px",
                     hasDataInput
-                      ? "border-[#c9aa72]/58 bg-[#151107]/92 text-[#f3d9a4] shadow-[0_14px_30px_rgba(0,0,0,0.42),0_0_24px_rgba(201,170,114,0.11),inset_0_1px_0_rgba(255,255,255,0.13)] hover:border-[#f0d7a0]/72 hover:bg-[#1b1509] hover:shadow-[0_16px_34px_rgba(0,0,0,0.46),0_0_28px_rgba(201,170,114,0.15),inset_0_1px_0_rgba(255,255,255,0.16)]"
-                      : "",
+                      ? "bg-gradient-to-r from-transparent via-[#f0d7a0]/46 to-transparent"
+                      : "bg-gradient-to-r from-transparent via-cyan-100/42 to-transparent",
                   )}
-                >
+                />
+                <span aria-hidden="true" className="flex items-center gap-1.5">
                   <Paperclip className="size-5" strokeWidth={1.8} />
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    className="sr-only"
-                    onChange={(event) => handleFiles(event.target.files)}
-                  />
-                </label>
-              ) : null}
+                  <span className="grid gap-0.5 opacity-70 transition group-hover/upload:opacity-100">
+                    <span className={cn("h-1 w-3 rounded-[1px]", hasDataInput ? "bg-[#f0d7a0]/62" : "bg-cyan-100/55")} />
+                    <span className={cn("h-1 w-4 rounded-[1px]", hasDataInput ? "bg-[#c9aa72]/48" : "bg-cyan-200/38")} />
+                  </span>
+                </span>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="sr-only"
+                  tabIndex={shouldShowDatasetUpload ? 0 : -1}
+                  onChange={(event) => handleFiles(event.target.files)}
+                />
+              </label>
             </div>
           </div>
-
         </div>
       </section>
     </main>

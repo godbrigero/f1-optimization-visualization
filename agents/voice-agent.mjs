@@ -88,9 +88,9 @@ export default defineAgent({
     const session = new voice.AgentSession({
       vad: new inference.VAD({
         model: "silero",
-        minSpeechDuration: 30,
-        minSilenceDuration: 180,
-        activationThreshold: 0.42,
+        minSpeechDuration: boundedNumberEnv("LIVEKIT_AGENT_VAD_MIN_SPEECH_MS", 45, 20, 500),
+        minSilenceDuration: boundedNumberEnv("LIVEKIT_AGENT_VAD_MIN_SILENCE_MS", 95, 60, 600),
+        activationThreshold: boundedNumberEnv("LIVEKIT_AGENT_VAD_ACTIVATION_THRESHOLD", 0.55, 0.2, 0.8),
       }),
       stt: new inference.STT({
         model: sttModel,
@@ -98,8 +98,8 @@ export default defineAgent({
         apiKey: livekitApiKey,
         apiSecret: livekitApiSecret,
         modelOptions: {
-          eager_eot_threshold: 0.42,
-          eot_timeout_ms: boundedNumberEnv("LIVEKIT_AGENT_EOT_TIMEOUT_MS", 500, 500, 60000),
+          eager_eot_threshold: boundedNumberEnv("LIVEKIT_AGENT_EAGER_EOT_THRESHOLD", 0.3, 0.1, 0.9),
+          eot_timeout_ms: boundedNumberEnv("LIVEKIT_AGENT_EOT_TIMEOUT_MS", 260, 180, 60000),
           language_hint: "en",
         },
       }),
@@ -117,7 +117,7 @@ export default defineAgent({
         apiSecret: livekitApiSecret,
         modelOptions: {
           speed: process.env.LIVEKIT_AGENT_TTS_SPEED || "normal",
-          max_buffer_delay_ms: optionalNumberEnv("LIVEKIT_AGENT_TTS_MAX_BUFFER_DELAY_MS", 120),
+          max_buffer_delay_ms: boundedNumberEnv("LIVEKIT_AGENT_TTS_MAX_BUFFER_DELAY_MS", 20, 0, 1000),
         },
       }),
       aecWarmupDuration: null,
@@ -133,8 +133,8 @@ export default defineAgent({
           enabled: false,
         },
         endpointing: {
-          minDelay: 120,
-          maxDelay: 550,
+          minDelay: boundedNumberEnv("LIVEKIT_AGENT_ENDPOINT_MIN_DELAY_MS", 35, 20, 1000),
+          maxDelay: boundedNumberEnv("LIVEKIT_AGENT_ENDPOINT_MAX_DELAY_MS", 160, 80, 5000),
         },
       },
       ttsTextTransforms: ["filter_markdown", "filter_emoji"],
