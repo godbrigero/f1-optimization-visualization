@@ -28,6 +28,10 @@ import {
   storeAttachedDataset,
   type AttachedDatasetWindow,
 } from "@/lib/attached-dataset";
+import {
+  CONVERSATION_SUMMARY_STORAGE_KEY,
+  publishConversationSummary,
+} from "@/lib/conversation-summary";
 import { cn } from "@/lib/utils";
 import { api } from "@/trpc/react";
 
@@ -38,7 +42,9 @@ const START_AGENT_WORK_TOPIC = "lebronsseiur.start_agent_work";
 const VOICE_DEBUG_TOPIC = "lebronsseiur.voice_debug";
 const VOICE_ROOM_PREFIX = "lebronsseiur-model-conversation";
 const CONVERSATION_MESSAGES_STORAGE_KEY = "f1-agent-conversation-messages";
+const AGENTS_ROUTE = "/agents";
 const START_AGENT_WORK_HANDOFF_DELAY_MS = 4200;
+const DEFAULT_CONVERSATION_SUMMARY = "The user asked Bron to start working.";
 const DEFAULT_VOICE_DEBUG_CONFIG = {
   activationThreshold: voiceAgentDefaults.vad.activationThreshold,
   eotTimeoutMs: voiceAgentDefaults.eotTimeoutMs,
@@ -144,6 +150,22 @@ function storeConversationMessages(messages: ConversationMessage[]) {
     CONVERSATION_MESSAGES_STORAGE_KEY,
     JSON.stringify(messages),
   );
+}
+
+function createFallbackConversationSummary(
+  messages: ConversationMessage[],
+  latestSpokenIntent: string,
+) {
+  const latestUserMessage =
+    [...messages].reverse().find((message) => message.role === "user")
+      ?.content ?? "";
+  const summaryText = (latestSpokenIntent || latestUserMessage).trim();
+
+  if (!summaryText) {
+    return DEFAULT_CONVERSATION_SUMMARY;
+  }
+
+  return `Driver request: ${summaryText.slice(0, 220)}`;
 }
 
 function formatDebugTime(time: number) {
@@ -1387,6 +1409,7 @@ export function SpeechInputWorkbench() {
   const responseTimerRef = useRef<number | null>(null);
   const agentWaitTimerRef = useRef<number | null>(null);
   const handoffTimerRef = useRef<number | null>(null);
+  const bronIdleHintTimerRef = useRef<number | null>(null);
   const liveKitRoomRef = useRef<Room | null>(null);
   const micAnalyserRef = useRef<AudioAnalyserHandle | null>(null);
   const micAnalyserFrameRef = useRef<number | null>(null);
@@ -1407,11 +1430,14 @@ export function SpeechInputWorkbench() {
   );
   const spokenInputRef = useRef("");
   const isSummarizingRef = useRef(false);
+  const hasStartedSummaryRequestRef = useRef(false);
   const hasStartedRoutingRef = useRef(false);
+  const hasClickedBronRef = useRef(false);
   const voiceDebugConfigRef = useRef<VoiceDebugConfig>(
     DEFAULT_VOICE_DEBUG_CONFIG,
   );
   const [fileName, setFileName] = useState("");
+  const [showBronIdleHint, setShowBronIdleHint] = useState(false);
   const [isDatasetUploadPrompted, setIsDatasetUploadPrompted] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isConnectingVoice, setIsConnectingVoice] = useState(false);
@@ -1690,7 +1716,7 @@ export function SpeechInputWorkbench() {
   }
 
   useEffect(() => {
-    router.prefetch("/agents");
+    router.prefetch(AGENTS_ROUTE);
 
     return () => {
       const room = liveKitRoomRef.current;
@@ -1714,6 +1740,10 @@ export function SpeechInputWorkbench() {
 
       if (handoffTimerRef.current) {
         window.clearTimeout(handoffTimerRef.current);
+      }
+
+      if (bronIdleHintTimerRef.current) {
+        window.clearTimeout(bronIdleHintTimerRef.current);
       }
     };
   }, [router]);
@@ -1798,12 +1828,13 @@ export function SpeechInputWorkbench() {
     conversationRef.current = [];
     spokenInputRef.current = "";
     isSummarizingRef.current = false;
+    hasStartedSummaryRequestRef.current = false;
     hasStartedRoutingRef.current = false;
     setIsSummarizing(false);
     setFileName("");
     setIsDatasetUploadPrompted(false);
     window.sessionStorage.removeItem(CONVERSATION_MESSAGES_STORAGE_KEY);
-    window.sessionStorage.removeItem("f1-agent-conversation-summary");
+    window.sessionStorage.removeItem(CONVERSATION_SUMMARY_STORAGE_KEY);
     window.sessionStorage.removeItem(ATTACHED_DATASET_STORAGE_KEY);
     delete (window as AttachedDatasetWindow).__f1AgentAttachedDataset;
     router.push("/");
@@ -2052,6 +2083,45 @@ export function SpeechInputWorkbench() {
     }
   }
 
+  function getSummaryMessages() {
+    const latestConversation = conversationRef.current;
+    const latestSpokenIntent = spokenInputRef.current.trim();
+
+    return latestConversation.length > 0
+      ? latestConversation
+      : [
+          {
+            role: "user" as const,
+            content:
+              latestSpokenIntent || DEFAULT_CONVERSATION_SUMMARY,
+          },
+        ];
+  }
+
+  function startConversationSummary() {
+    if (hasStartedSummaryRequestRef.current) {
+      return;
+    }
+
+    const summaryMessages = getSummaryMessages();
+    const latestSpokenIntent = spokenInputRef.current.trim();
+
+    publishConversationSummary(
+      createFallbackConversationSummary(summaryMessages, latestSpokenIntent),
+    );
+
+    hasStartedSummaryRequestRef.current = true;
+
+    void summarizeMutation
+      .mutateAsync({
+        messages: summaryMessages,
+      })
+      .then(({ summary }) => {
+        publishConversationSummary(summary);
+      })
+      .catch(() => undefined);
+  }
+
   function startAgentWorkHandoff() {
     if (isSummarizingRef.current || handoffTimerRef.current) {
       return;
@@ -2059,9 +2129,10 @@ export function SpeechInputWorkbench() {
 
     isSummarizingRef.current = true;
     setIsSummarizing(true);
+    startConversationSummary();
     handoffTimerRef.current = window.setTimeout(() => {
       handoffTimerRef.current = null;
-      void continueToAgents();
+      continueToAgents();
     }, START_AGENT_WORK_HANDOFF_DELAY_MS);
   }
 
@@ -2282,6 +2353,67 @@ export function SpeechInputWorkbench() {
     }
   }
 
+  function handleBronToggle() {
+    hasClickedBronRef.current = true;
+    setShowBronIdleHint(false);
+
+    if (bronIdleHintTimerRef.current) {
+      window.clearTimeout(bronIdleHintTimerRef.current);
+      bronIdleHintTimerRef.current = null;
+    }
+
+    void startSpeechInput();
+  }
+
+  useEffect(() => {
+    if (
+      hasClickedBronRef.current ||
+      isListening ||
+      isConnectingVoice ||
+      isSummarizing
+    ) {
+      setShowBronIdleHint(false);
+
+      if (bronIdleHintTimerRef.current) {
+        window.clearTimeout(bronIdleHintTimerRef.current);
+        bronIdleHintTimerRef.current = null;
+      }
+
+      return;
+    }
+
+    function queueHint() {
+      if (hasClickedBronRef.current) {
+        return;
+      }
+
+      setShowBronIdleHint(false);
+
+      if (bronIdleHintTimerRef.current) {
+        window.clearTimeout(bronIdleHintTimerRef.current);
+      }
+
+      bronIdleHintTimerRef.current = window.setTimeout(() => {
+        bronIdleHintTimerRef.current = null;
+        setShowBronIdleHint(true);
+      }, 5000);
+    }
+
+    queueHint();
+    window.addEventListener("pointerdown", queueHint, { passive: true });
+    window.addEventListener("keydown", queueHint);
+
+    return () => {
+      window.removeEventListener("pointerdown", queueHint);
+      window.removeEventListener("keydown", queueHint);
+
+      if (bronIdleHintTimerRef.current) {
+        window.clearTimeout(bronIdleHintTimerRef.current);
+        bronIdleHintTimerRef.current = null;
+      }
+    };
+  }, [isConnectingVoice, isListening, isSummarizing]);
+
   useEffect(() => {
     function handleEscapeKey(event: KeyboardEvent) {
       if (event.key !== "Escape") {
@@ -2342,7 +2474,7 @@ export function SpeechInputWorkbench() {
     return () => window.removeEventListener("keydown", handleEscapeKey);
   }, [isListening, showVoiceDebug]);
 
-  async function continueToAgents() {
+  function continueToAgents() {
     if (hasStartedRoutingRef.current) {
       return;
     }
@@ -2359,41 +2491,12 @@ export function SpeechInputWorkbench() {
       handoffTimerRef.current = null;
     }
 
-    await stopLiveKitRoom();
-
-    try {
-      const latestConversation = conversationRef.current;
-      const latestSpokenIntent = spokenInputRef.current.trim();
-      const summaryMessages =
-        latestConversation.length > 0
-          ? latestConversation
-          : [
-              {
-                role: "user" as const,
-                content:
-                  latestSpokenIntent || "The user asked Bron to start working.",
-              },
-            ];
-      const { summary } = await summarizeMutation.mutateAsync({
-        messages: summaryMessages,
-      });
-
-      window.sessionStorage.setItem("f1-agent-conversation-summary", summary);
-      window.sessionStorage.removeItem(CONVERSATION_MESSAGES_STORAGE_KEY);
-      router.push("/agents", {
-        scroll: false,
-        transitionTypes: ["nav-forward"],
-      });
-    } catch (error) {
-      showTemporaryResponse(
-        error instanceof Error
-          ? error.message
-          : "Could not summarize conversation.",
-      );
-      isSummarizingRef.current = false;
-      hasStartedRoutingRef.current = false;
-      setIsSummarizing(false);
-    }
+    startConversationSummary();
+    window.sessionStorage.removeItem(CONVERSATION_MESSAGES_STORAGE_KEY);
+    router.push(AGENTS_ROUTE, {
+      scroll: false,
+      transitionTypes: ["nav-forward"],
+    });
   }
 
   return (
@@ -2463,8 +2566,21 @@ export function SpeechInputWorkbench() {
               summarizing={isSummarizing}
               bronVoiceLevel={bronVoiceLevel}
               voiceLevel={micLevel}
-              onToggle={startSpeechInput}
+              onToggle={handleBronToggle}
             />
+
+            <div
+              role="status"
+              aria-live="polite"
+              className={cn(
+                "pointer-events-none absolute left-1/2 top-[calc(50%-5rem)] z-[70] w-[min(13.5rem,calc(50vw-1.5rem))] translate-x-[5.7rem] rotate-[45deg] text-left text-xs font-medium leading-5 text-cyan-50/30 transition-all duration-500 [text-shadow:0_0_16px_rgba(103,232,249,0.16)] sm:top-[calc(50%-6.65rem)] sm:translate-x-[8.3rem]",
+                showBronIdleHint
+                  ? "translate-y-0 opacity-100"
+                  : "translate-y-1 opacity-0",
+              )}
+            >
+              to try out our agent system, talk to Bron about your problem
+            </div>
 
             <span
               aria-hidden="true"

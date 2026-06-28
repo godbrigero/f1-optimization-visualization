@@ -14,10 +14,13 @@
 // driver based on `NEXT_PUBLIC_AGENT_RUN_WS`). Keep the backend's WebSocket
 // messages matching the `RunEvent` union below and nothing else has to change.
 
+export type GenomeNodeKind = "agent" | "optional" | "output" | "input" | "userData";
+
 export type GenomeNode = {
   id: string;
   model: string;
   description: string;
+  kind?: GenomeNodeKind;
   terminal?: boolean;
 };
 
@@ -179,19 +182,36 @@ export type RunDriver = {
 // Team definitions used by the simulated timeline.
 // ---------------------------------------------------------------------------
 
+const userDataNode: GenomeNode = {
+  id: "user-data",
+  model: "User Data",
+  description: "uploaded dataset",
+  kind: "optional",
+};
+
+const webSearchNode: GenomeNode = {
+  id: "web-search",
+  model: "Web Search",
+  description: "live source lookup",
+  kind: "optional",
+};
+
 const seedNodes: GenomeNode[] = [
-  { id: "input", model: "Input", description: "request + source data", terminal: true },
+  { id: "input", model: "Input", description: "user request", kind: "optional" },
+  userDataNode,
+  webSearchNode,
   { id: "ingest", model: "Ingest Agent", description: "captures events" },
   { id: "router", model: "Router Agent", description: "assigns tasks" },
   { id: "planner", model: "Planner Model", description: "builds sequence" },
   { id: "reasoner", model: "Reasoner Model", description: "solves state" },
   { id: "tools", model: "Tool Agent", description: "executes calls" },
   { id: "review", model: "Review Agent", description: "validates output" },
-  { id: "output", model: "Output", description: "answer + actions", terminal: true },
+  { id: "output", model: "Output", description: "answer + actions", kind: "output", terminal: true },
 ];
 
 const linearEdges: GenomeEdge[] = [
   { from: "input", to: "ingest" },
+  { from: "user-data", to: "ingest", primary: false },
   { from: "ingest", to: "router" },
   { from: "router", to: "planner" },
   { from: "planner", to: "reasoner" },
@@ -202,6 +222,7 @@ const linearEdges: GenomeEdge[] = [
 
 const parallelEdges: GenomeEdge[] = [
   { from: "input", to: "ingest" },
+  { from: "user-data", to: "ingest", primary: false },
   { from: "ingest", to: "router" },
   { from: "router", to: "planner" },
   { from: "router", to: "reasoner" },
@@ -213,17 +234,20 @@ const parallelEdges: GenomeEdge[] = [
 ];
 
 const rearrangedNodes: GenomeNode[] = [
-  { id: "input", model: "Input", description: "request + source data", terminal: true },
+  { id: "input", model: "Input", description: "user request", kind: "optional" },
+  userDataNode,
+  webSearchNode,
   { id: "router", model: "Router Agent", description: "assigns tasks" },
   { id: "planner", model: "Planner Model", description: "builds sequence" },
   { id: "reasoner", model: "Reasoner Model", description: "solves state" },
   { id: "tools", model: "Tool Agent", description: "executes calls" },
   { id: "review", model: "Review Agent", description: "validates output" },
-  { id: "output", model: "Output", description: "answer + actions", terminal: true },
+  { id: "output", model: "Output", description: "answer + actions", kind: "output", terminal: true },
 ];
 
 const rearrangedEdges: GenomeEdge[] = [
   { from: "input", to: "router" },
+  { from: "user-data", to: "router", primary: false },
   { from: "router", to: "planner" },
   { from: "router", to: "reasoner" },
   { from: "planner", to: "tools" },
@@ -233,18 +257,21 @@ const rearrangedEdges: GenomeEdge[] = [
 ];
 
 const grownNodes: GenomeNode[] = [
-  { id: "input", model: "Input", description: "request + source data", terminal: true },
+  { id: "input", model: "Input", description: "user request", kind: "optional" },
+  userDataNode,
+  webSearchNode,
   { id: "router", model: "Router Agent", description: "assigns tasks" },
   { id: "planner", model: "Planner Model", description: "builds sequence" },
   { id: "reasoner", model: "Reasoner Model", description: "solves state" },
   { id: "tools", model: "Tool Agent", description: "executes calls" },
   { id: "risk", model: "Risk Balancer", description: "stress-tests plan" },
   { id: "review", model: "Review Agent", description: "validates output" },
-  { id: "output", model: "Output", description: "answer + actions", terminal: true },
+  { id: "output", model: "Output", description: "answer + actions", kind: "output", terminal: true },
 ];
 
 const grownEdges: GenomeEdge[] = [
   { from: "input", to: "router" },
+  { from: "user-data", to: "router", primary: false },
   { from: "router", to: "planner" },
   { from: "router", to: "reasoner" },
   { from: "router", to: "tools" },

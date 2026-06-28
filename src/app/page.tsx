@@ -1,5 +1,20 @@
-import { FlightMap } from "@/components/flight-map";
+import type { Metadata } from "next";
+import { ViewTransition } from "react";
+import { SpeechInputWorkbench } from "@/components/speech-input-workbench";
 
-export default function Home() {
-  return <FlightMap />;
+export const metadata: Metadata = {
+  title: "Speech Input | Lebronsseiur",
+  description: "Upload optimization data and draft text-to-speech instructions.",
+};
+
+export default function HomePage() {
+  return (
+    <ViewTransition
+      enter={{ "nav-forward": "nav-forward", default: "none" }}
+      exit={{ "nav-forward": "nav-forward", default: "none" }}
+      default="none"
+    >
+      <SpeechInputWorkbench />
+    </ViewTransition>
+  );
 }

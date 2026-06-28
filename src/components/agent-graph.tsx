@@ -1,7 +1,20 @@
 "use client";
 
-import { Activity, Boxes, GitBranch, PanelLeft, RotateCcw, X } from "lucide-react";
+import Link from "next/link";
 import {
+  Activity,
+  ArrowRight,
+  Boxes,
+  Database,
+  FileText,
+  GitBranch,
+  PanelLeft,
+  PanelRight,
+  RotateCcw,
+  X,
+} from "lucide-react";
+import {
+  type FocusEvent,
   type PointerEvent,
   type WheelEvent,
   useCallback,
@@ -15,6 +28,7 @@ import {
 import {
   type GenomeEdge,
   type GenomeNode,
+  type GenomeNodeKind,
   type RunDriver,
   type RunEvent,
   applyRunEvent,
@@ -23,6 +37,15 @@ import {
   displayedGenome,
   initialRunState,
 } from "@/lib/agent-run";
+import {
+  formatFileSize,
+  getAttachedDataset,
+  type AttachedDatasetMetadata,
+} from "@/lib/attached-dataset";
+import {
+  CONVERSATION_SUMMARY_UPDATED_EVENT,
+  readConversationSummary,
+} from "@/lib/conversation-summary";
 
 type LaidNode = GenomeNode & {
   x: number;
@@ -30,6 +53,7 @@ type LaidNode = GenomeNode & {
   width: number;
   height: number;
   entry: boolean;
+  visualKind: GenomeNodeKind;
 };
 
 type GraphViewBox = {
@@ -40,16 +64,117 @@ type GraphViewBox = {
 };
 
 const centerX = 600;
-const topY = 80;
+const topY = 190;
 const rowGap = 132;
 const colGap = 300;
 const terminalWidth = 280;
+const optionalNodeWidth = 260;
 const nodeWidth = 244;
 const terminalHeight = 96;
+const optionalNodeHeight = 92;
 const nodeHeight = 78;
+const sidecarGap = 52;
 
 function isPrimaryEdge(edge: GenomeEdge) {
   return edge.primary !== false;
+}
+
+function normalizeNodeText(value: string) {
+  return value.toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function inferNodeKind(node: GenomeNode, rankValue: number): GenomeNodeKind {
+  if (node.kind === "optional" || node.kind === "input" || node.kind === "userData") {
+    return "optional";
+  }
+  if (node.kind === "output") {
+    return "output";
+  }
+  if (node.kind === "agent") {
+    return "agent";
+  }
+
+  const normalizedText = normalizeNodeText(`${node.id} ${node.model}`);
+  if (
+    normalizedText.includes("userdata") ||
+    normalizedText.includes("dataset") ||
+    normalizedText.includes("input") ||
+    normalizedText.includes("websearch") ||
+    normalizedText.includes("search") ||
+    normalizedText.includes("template")
+  ) {
+    return "optional";
+  }
+  if (normalizedText.includes("output")) {
+    return "output";
+  }
+  if (node.terminal) {
+    return rankValue === 0 ? "optional" : "output";
+  }
+
+  return "agent";
+}
+
+function nodeSizeFor(kind: GenomeNodeKind) {
+  if (kind === "output") {
+    return { width: terminalWidth, height: terminalHeight };
+  }
+  if (kind === "optional" || kind === "input" || kind === "userData") {
+    return { width: optionalNodeWidth, height: optionalNodeHeight };
+  }
+
+  return { width: nodeWidth, height: nodeHeight };
+}
+
+function nodeRadiusFor(kind: GenomeNodeKind) {
+  if (kind === "output") {
+    return 28;
+  }
+  if (kind === "optional" || kind === "input" || kind === "userData") {
+    return 14;
+  }
+
+  return 6;
+}
+
+function nodeFrameFor(kind: GenomeNodeKind) {
+  switch (kind) {
+    case "output":
+      return {
+        fill: "#171006",
+        stroke: "#fbbf24",
+        strokeOpacity: ".95",
+        strokeWidth: "1.7",
+        dividerOpacity: ".34",
+        titleFill: "#fff7d6",
+        titleClassName: "font-sans text-[20px] font-semibold",
+        descriptionFill: "rgba(254,240,138,0.68)",
+      };
+    case "optional":
+    case "input":
+    case "userData":
+      return {
+        fill: "#061414",
+        stroke: "#5eead4",
+        strokeOpacity: ".88",
+        strokeWidth: "1.35",
+        dividerOpacity: ".28",
+        titleFill: "#d7fff8",
+        titleClassName: "font-sans text-[18px] font-semibold",
+        descriptionFill: "rgba(153,246,228,0.64)",
+      };
+    default:
+      return {
+        fill: "#050505",
+        stroke: "white",
+        strokeOpacity: ".5",
+        strokeWidth: "1",
+        dividerOpacity: ".16",
+        titleFill: "white",
+        titleClassName: "font-sans text-[17px] font-medium",
+        descriptionFill: "rgba(255,255,255,0.48)",
+      };
+  }
 }
 
 // Longest-path rank from the entry nodes, so any pushed topology can be laid
@@ -87,10 +212,21 @@ function computeRanks(nodes: GenomeNode[], edges: GenomeEdge[]) {
 }
 
 function layoutGenome(nodes: GenomeNode[], edges: GenomeEdge[]) {
-  const rank = computeRanks(nodes, edges);
+  const linkedNodeIds = new Set<string>();
+  edges.forEach((edge) => {
+    linkedNodeIds.add(edge.from);
+    linkedNodeIds.add(edge.to);
+  });
+
+  const sidecarNodes = nodes.filter((node) => {
+    const visualKind = inferNodeKind(node, 0);
+    return visualKind === "optional" && !linkedNodeIds.has(node.id);
+  });
+  const rankedNodes = nodes.filter((node) => !sidecarNodes.includes(node));
+  const rank = computeRanks(rankedNodes, edges);
   const byRank = new Map<number, GenomeNode[]>();
 
-  nodes.forEach((node) => {
+  rankedNodes.forEach((node) => {
     const value = rank.get(node.id) ?? 0;
     const group = byRank.get(value);
     if (group) {
@@ -105,14 +241,36 @@ function layoutGenome(nodes: GenomeNode[], edges: GenomeEdge[]) {
   byRank.forEach((group, value) => {
     group.forEach((node, index) => {
       const offset = index - (group.length - 1) / 2;
+      const visualKind = inferNodeKind(node, value);
+      const { width, height } = nodeSizeFor(visualKind);
       laidNodes.push({
         ...node,
         x: centerX + offset * colGap,
         y: topY + value * rowGap,
-        width: node.terminal ? terminalWidth : nodeWidth,
-        height: node.terminal ? terminalHeight : nodeHeight,
-        entry: Boolean(node.terminal) && value === 0,
+        width,
+        height,
+        entry: visualKind === "optional" && normalizeNodeText(node.model).includes("input"),
+        visualKind,
       });
+    });
+  });
+
+  const rankedRightEdge =
+    laidNodes.length > 0
+      ? Math.max(...laidNodes.map((laidNode) => laidNode.x + laidNode.width / 2))
+      : centerX + terminalWidth / 2;
+
+  sidecarNodes.forEach((node, index) => {
+    const visualKind = inferNodeKind(node, 0);
+    const { width, height } = nodeSizeFor(visualKind);
+    laidNodes.push({
+      ...node,
+      x: rankedRightEdge + sidecarGap + width / 2,
+      y: topY + index * (height + 22),
+      width,
+      height,
+      entry: false,
+      visualKind,
     });
   });
 
@@ -153,12 +311,13 @@ function connectorPath(start: { x: number; y: number }, end: { x: number; y: num
 const rankStepSeconds = 1.4;
 const edgeTravelSeconds = 0.85;
 const nodeProcessingSeconds = 0.55;
+const defaultViewBoxHeight = 900;
 
 const initialViewBox: GraphViewBox = {
   x: 160,
   y: 20,
   width: 880,
-  height: 780,
+  height: defaultViewBoxHeight,
 };
 
 const minZoomWidth = 520;
@@ -177,6 +336,49 @@ function isDefaultViewBox(viewBox: GraphViewBox) {
   );
 }
 
+function readAttachedDatasetMetadata() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return getAttachedDataset()?.metadata ?? null;
+}
+
+function hasUploadedUserDataNode(nodes: GenomeNode[]) {
+  return nodes.some((node) => {
+    const normalizedText = normalizeNodeText(`${node.id} ${node.model}`);
+    return normalizedText.includes("userdata") || normalizedText.includes("uploadeddataset");
+  });
+}
+
+function createUserDataNode(metadata: AttachedDatasetMetadata): GenomeNode {
+  return {
+    id: "user-data",
+    model: "User Data",
+    description: `${formatFileSize(metadata.size)} uploaded`,
+    kind: "optional",
+  };
+}
+
+function withUploadedUserData(
+  genome: { nodes: GenomeNode[]; edges: GenomeEdge[] } | null,
+  metadata: AttachedDatasetMetadata | null,
+) {
+  if (!metadata) {
+    return genome;
+  }
+
+  const baseGenome = genome ?? { nodes: [], edges: [] };
+  if (hasUploadedUserDataNode(baseGenome.nodes)) {
+    return baseGenome;
+  }
+
+  return {
+    nodes: [...baseGenome.nodes, createUserDataNode(metadata)],
+    edges: baseGenome.edges,
+  };
+}
+
 function createDriver(): RunDriver {
   const socketUrl = process.env.NEXT_PUBLIC_AGENT_RUN_WS;
   // Swap point: set NEXT_PUBLIC_AGENT_RUN_WS to the Python brain's WebSocket to
@@ -189,17 +391,18 @@ export function AgentGraph() {
   const emit = useCallback((event: RunEvent) => dispatch(event), []);
   const driverRef = useRef<RunDriver | null>(null);
 
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isContextSidebarOpen, setIsContextSidebarOpen] = useState(false);
+  const [isTopMenuExpanded, setIsTopMenuExpanded] = useState(false);
   const [isRunProgressMounted, setIsRunProgressMounted] = useState(false);
   const [isRunProgressVisible, setIsRunProgressVisible] = useState(false);
   const [manualSelection, setManualSelection] = useState<number | null>(null);
-  const [conversationSummary] = useState(() => {
-    if (typeof window === "undefined") {
-      return "";
-    }
-
-    return window.sessionStorage.getItem("f1-agent-conversation-summary") ?? "";
-  });
+  const [conversationSummary, setConversationSummary] = useState(
+    readConversationSummary,
+  );
+  const [attachedDatasetMetadata, setAttachedDatasetMetadata] = useState(
+    readAttachedDatasetMetadata,
+  );
   const [viewBox, setViewBox] = useState<GraphViewBox>(initialViewBox);
   const [isPanning, setIsPanning] = useState(false);
   const lastPointerPosition = useRef<{ x: number; y: number } | null>(null);
@@ -207,6 +410,8 @@ export function AgentGraph() {
   const zoomAnimationFrame = useRef<number | null>(null);
   const runProgressAnimationFrame = useRef<number | null>(null);
   const runProgressCloseTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const thresholdFocusTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastThresholdFlashGenerationId = useRef<number | null>(null);
 
   // Start the run (simulation, or the real backend if the env URL is set), and
   // allow manual/backend injection through a window hook + custom event.
@@ -240,20 +445,41 @@ export function AgentGraph() {
       if (runProgressCloseTimeout.current) {
         clearTimeout(runProgressCloseTimeout.current);
       }
+      if (thresholdFocusTimeout.current) {
+        clearTimeout(thresholdFocusTimeout.current);
+      }
     };
   }, [emit]);
 
   useEffect(() => {
+    const metadataRefreshTimeout = setTimeout(() => {
+      setAttachedDatasetMetadata(readAttachedDatasetMetadata());
+    }, 0);
+
+    function handleConversationSummaryUpdate(event: Event) {
+      const summary = (event as CustomEvent<string>).detail;
+      setConversationSummary(
+        typeof summary === "string" ? summary : readConversationSummary(),
+      );
+    }
+
+    window.addEventListener(
+      CONVERSATION_SUMMARY_UPDATED_EVENT,
+      handleConversationSummaryUpdate,
+    );
+
+    return () => {
+      clearTimeout(metadataRefreshTimeout);
+      window.removeEventListener(
+        CONVERSATION_SUMMARY_UPDATED_EVENT,
+        handleConversationSummaryUpdate,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
     viewBoxRef.current = viewBox;
   }, [viewBox]);
-
-  function replayRun() {
-    driverRef.current?.stop();
-    setManualSelection(null);
-    const driver = createSimulatedRun();
-    driverRef.current = driver;
-    driver.start(emit);
-  }
 
   // The generation in view follows the run, unless the user manually picked one.
   const viewGenerationId = manualSelection ?? runState.activeGenerationId;
@@ -265,22 +491,28 @@ export function AgentGraph() {
   const { drawGenome, drawKey } = useMemo(() => {
     if (runState.candidate) {
       return {
-        drawGenome: { nodes: runState.candidate.nodes, edges: runState.candidate.edges },
+        drawGenome: withUploadedUserData(
+          { nodes: runState.candidate.nodes, edges: runState.candidate.edges },
+          attachedDatasetMetadata,
+        ),
         drawKey: `candidate-${runState.candidate.label}`,
       };
     }
     if (viewedGeneration) {
       return {
-        drawGenome: { nodes: viewedGeneration.nodes, edges: viewedGeneration.edges },
+        drawGenome: withUploadedUserData(
+          { nodes: viewedGeneration.nodes, edges: viewedGeneration.edges },
+          attachedDatasetMetadata,
+        ),
         drawKey: `gen-${viewedGeneration.id}`,
       };
     }
     const fallback = displayedGenome(runState);
     return {
-      drawGenome: fallback,
+      drawGenome: withUploadedUserData(fallback, attachedDatasetMetadata),
       drawKey: "empty",
     };
-  }, [runState, viewedGeneration]);
+  }, [attachedDatasetMetadata, runState, viewedGeneration]);
 
   const { laidNodes, rank, maxRank } = useMemo(
     () => layoutGenome(drawGenome?.nodes ?? [], drawGenome?.edges ?? []),
@@ -401,7 +633,20 @@ export function AgentGraph() {
     animateViewBox(initialViewBox);
   }
 
+  function handleTopMenuBlur(event: FocusEvent<HTMLDivElement>) {
+    const nextFocusedElement = event.relatedTarget;
+    if (
+      !(nextFocusedElement instanceof Node) ||
+      !event.currentTarget.contains(nextFocusedElement)
+    ) {
+      setIsTopMenuExpanded(false);
+    }
+  }
+
   function openRunProgress() {
+    setIsContextSidebarOpen(false);
+    setIsTopMenuExpanded(false);
+
     if (runProgressCloseTimeout.current) {
       clearTimeout(runProgressCloseTimeout.current);
     }
@@ -431,6 +676,46 @@ export function AgentGraph() {
 
   const hasMovedView = !isDefaultViewBox(viewBox);
   const isRunProgressActive = isRunProgressVisible;
+  const hasReachedThreshold = runState.bestFitness >= runState.threshold;
+  const finalGeneration =
+    runState.generations[runState.generations.length - 1] ?? null;
+  const hasContextPanelContent = Boolean(conversationSummary || attachedDatasetMetadata);
+  const isFinalGenerationDisplayed = Boolean(
+    hasReachedThreshold &&
+      !runState.candidate &&
+      finalGeneration &&
+      viewedGeneration?.id === finalGeneration.id,
+  );
+
+  useEffect(() => {
+    if (!hasReachedThreshold) {
+      lastThresholdFlashGenerationId.current = null;
+      if (thresholdFocusTimeout.current) {
+        clearTimeout(thresholdFocusTimeout.current);
+        thresholdFocusTimeout.current = null;
+      }
+      return;
+    }
+
+    if (
+      !finalGeneration ||
+      runState.candidate ||
+      lastThresholdFlashGenerationId.current === finalGeneration.id
+    ) {
+      return;
+    }
+
+    lastThresholdFlashGenerationId.current = finalGeneration.id;
+    if (thresholdFocusTimeout.current) {
+      clearTimeout(thresholdFocusTimeout.current);
+    }
+
+    thresholdFocusTimeout.current = setTimeout(() => {
+      setManualSelection(finalGeneration.id);
+      setIsSidebarOpen(true);
+      thresholdFocusTimeout.current = null;
+    }, 0);
+  }, [finalGeneration, hasReachedThreshold, runState.candidate]);
 
   return (
     <main
@@ -469,15 +754,31 @@ export function AgentGraph() {
               : " — scoring…"}
           </div>
         ) : null}
+        {isFinalGenerationDisplayed && finalGeneration ? (
+          <div
+            aria-live="polite"
+            className="mt-2 flex items-center justify-between gap-3 border-t border-white/10 pt-2"
+          >
+            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/78">
+              Final swarm displayed on graph
+            </span>
+            <span className="shrink-0 font-mono text-[10px] text-white/46">
+              {finalGeneration.name} · {formatFitness(finalGeneration.fitness)}
+            </span>
+          </div>
+        ) : null}
       </section>
 
-      {conversationSummary ? (
-        <section className="pointer-events-none absolute bottom-5 left-1/2 z-20 w-[min(620px,calc(100vw-2.5rem))] -translate-x-1/2 rounded-md border border-white/12 bg-black/78 px-4 py-2.5 backdrop-blur-xl">
-          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/34">
-            Conversation summary
-          </div>
-          <p className="mt-1 line-clamp-2 text-xs leading-5 text-white/64">{conversationSummary}</p>
-        </section>
+      {hasReachedThreshold ? (
+        <Link
+          href="/flight"
+          aria-label="Open result visualization"
+          transitionTypes={["nav-forward"]}
+          className="absolute bottom-5 right-5 z-30 inline-flex h-10 items-center gap-2 rounded-md border border-white/20 bg-white px-4 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-black shadow-[0_18px_50px_rgba(0,0,0,0.42)] outline-none transition hover:bg-white/88 focus-visible:ring-2 focus-visible:ring-white/40"
+        >
+          Next
+          <ArrowRight className="size-4" />
+        </Link>
       ) : null}
 
       <button
@@ -493,39 +794,80 @@ export function AgentGraph() {
       </button>
 
       <div
-        className={`absolute right-5 top-5 z-30 flex items-center gap-2 transition-opacity ${
+        onBlur={handleTopMenuBlur}
+        onFocus={() => setIsTopMenuExpanded(true)}
+        onMouseEnter={() => setIsTopMenuExpanded(true)}
+        onMouseLeave={() => setIsTopMenuExpanded(false)}
+        className={`absolute right-5 top-5 z-30 h-9 transition-[width,opacity] duration-200 ease-out ${
+          isTopMenuExpanded ? "w-[min(32rem,calc(100vw-2.5rem))]" : "w-9"
+        } ${
           isRunProgressActive ? "pointer-events-none opacity-0" : "opacity-100"
         }`}
       >
-        {hasMovedView ? (
-          <button
-            type="button"
-            onClick={resetView}
-            className="inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
-          >
-            <RotateCcw className="size-4" />
-            Reset view
-          </button>
-        ) : null}
-
         <button
           type="button"
-          onClick={replayRun}
-          className="inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
-        >
-          <RotateCcw className="size-4" />
-          Replay
-        </button>
-
-        <button
-          type="button"
-          aria-label="Open run progress"
-          onClick={openRunProgress}
-          className="inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
+          aria-label="Open top controls"
+          aria-expanded={isTopMenuExpanded}
+          onClick={() => setIsTopMenuExpanded(true)}
+          className={`absolute right-0 top-0 inline-flex size-9 items-center justify-center rounded-md border border-white/14 bg-black/80 text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35 ${
+            isTopMenuExpanded
+              ? "pointer-events-none scale-95 opacity-0"
+              : "scale-100 opacity-100"
+          }`}
         >
           <Activity className="size-4" />
-          Run Progress
         </button>
+
+        <div
+          aria-label="Top controls"
+          aria-hidden={!isTopMenuExpanded}
+          className={`absolute right-0 top-0 flex items-center justify-end gap-2 transition-[transform,opacity] duration-200 ease-out ${
+            isTopMenuExpanded
+              ? "translate-x-0 scale-100 opacity-100"
+              : "pointer-events-none translate-x-2 scale-[0.98] opacity-0"
+          }`}
+        >
+          {hasContextPanelContent ? (
+            <button
+              type="button"
+              aria-label="Open context"
+              tabIndex={isTopMenuExpanded && !isContextSidebarOpen ? 0 : -1}
+              onClick={() => {
+                closeRunProgress();
+                setIsContextSidebarOpen(true);
+              }}
+              className={`inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35 ${
+                isContextSidebarOpen ? "pointer-events-none opacity-0" : "opacity-100"
+              }`}
+            >
+              <PanelRight className="size-4" />
+              Context
+            </button>
+          ) : null}
+
+          {hasMovedView ? (
+            <button
+              type="button"
+              tabIndex={isTopMenuExpanded ? 0 : -1}
+              onClick={resetView}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
+            >
+              <RotateCcw className="size-4" />
+              Reset view
+            </button>
+          ) : null}
+
+          <button
+            type="button"
+            aria-label="Open run progress"
+            tabIndex={isTopMenuExpanded ? 0 : -1}
+            onClick={openRunProgress}
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
+          >
+            <Activity className="size-4" />
+            Run Progress
+          </button>
+        </div>
       </div>
 
       <aside
@@ -559,49 +901,82 @@ export function AgentGraph() {
                   awaiting first generation
                 </div>
               ) : null}
-              {runState.generations.map((generation) => (
-                <button
-                  key={generation.id}
-                  type="button"
-                  onClick={() => setManualSelection(generation.id)}
-                  className={`group w-full rounded-md border px-3 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-white/35 ${
-                    generation.id === viewGenerationId
-                      ? "border-white/44 bg-white/[0.075] text-white"
-                      : "border-white/12 bg-black text-white/54 hover:border-white/28 hover:bg-white/[0.035] hover:text-white/80"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{generation.name}</div>
-                      <div className="mt-1 truncate text-xs text-white/38">
-                        {generation.description}
+              {runState.generations.map((generation) => {
+                const isViewedGeneration = generation.id === viewGenerationId;
+                const isFinalGeneration =
+                  hasReachedThreshold && generation.id === finalGeneration?.id;
+
+                return (
+                  <button
+                    key={generation.id}
+                    type="button"
+                    onClick={() => setManualSelection(generation.id)}
+                    className={`group relative w-full overflow-hidden rounded-md border px-3 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-white/35 ${
+                      isViewedGeneration
+                        ? "border-white/44 bg-white/[0.075] text-white"
+                        : "border-white/12 bg-black text-white/54 hover:border-white/28 hover:bg-white/[0.035] hover:text-white/80"
+                    }`}
+                  >
+                    {isFinalGeneration ? (
+                      <div className="result-plotted-flash pointer-events-none absolute left-4 right-4 top-3 z-10 rounded-sm border border-emerald-200/34 bg-emerald-950/90 px-3 py-2 text-center shadow-[0_14px_28px_rgba(0,0,0,0.34)] backdrop-blur-md">
+                        <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-emerald-100/86">
+                          Result plotted
+                        </div>
+                        <div className="mt-0.5 truncate text-[11px] text-emerald-50/78">
+                          Final swarm is on the graph
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <div className="truncate text-sm font-medium">{generation.name}</div>
+                          {isFinalGeneration ? (
+                            <span className="shrink-0 rounded-sm border border-emerald-300/24 bg-emerald-300/10 px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.12em] text-emerald-100/74">
+                              final
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-1 truncate text-xs text-white/38">
+                          {generation.description}
+                        </div>
+                      </div>
+                      <div className="shrink-0 rounded-sm border border-white/12 px-1.5 py-0.5 font-mono text-[10px] text-white/36">
+                        {formatFitness(generation.fitness)}
                       </div>
                     </div>
-                    <div className="shrink-0 rounded-sm border border-white/12 px-1.5 py-0.5 font-mono text-[10px] text-white/36">
-                      {formatFitness(generation.fitness)}
+                    <div className="mt-3 flex items-center gap-2">
+                      <span
+                        className={`h-px flex-1 ${
+                          isViewedGeneration ? "bg-white/22" : "bg-white/10"
+                        }`}
+                      />
+                      <span
+                        className={`font-mono text-[9px] uppercase tracking-[0.14em] ${
+                          isFinalGeneration && isViewedGeneration
+                            ? "text-emerald-100/60"
+                            : "text-white/30"
+                        }`}
+                      >
+                        {isFinalGeneration && isViewedGeneration
+                          ? "final swarm shown"
+                          : isViewedGeneration
+                            ? "active"
+                            : "select"}
+                      </span>
                     </div>
-                  </div>
-                  <div className="mt-3 flex items-center gap-2">
-                    <span
-                      className={`h-px flex-1 ${
-                        generation.id === viewGenerationId ? "bg-white/22" : "bg-white/10"
-                      }`}
-                    />
-                    <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-white/30">
-                      {generation.id === viewGenerationId ? "active" : "select"}
-                    </span>
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          <div className="border-t border-white/10 px-4 py-3">
+          <div className="flex max-h-[50vh] shrink-0 flex-col border-t border-white/10 px-4 py-3">
             <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-white/50">
               <Boxes className="size-3.5" />
               Corpus of agents · {runState.corpus.length}
             </div>
-            <div className="space-y-1">
+            <div className="min-h-0 space-y-1 overflow-y-auto">
               {runState.corpus.map((agent) => (
                 <div
                   key={agent.id}
@@ -625,6 +1000,62 @@ export function AgentGraph() {
             </div>
           </div>
       </aside>
+
+      {hasContextPanelContent ? (
+        <aside
+          aria-label="Context"
+          aria-hidden={!isContextSidebarOpen}
+          className={`absolute inset-y-0 right-0 z-40 flex w-[360px] max-w-[calc(100vw-1.5rem)] flex-col border-l border-white/12 bg-black/94 shadow-[-24px_0_70px_rgba(0,0,0,0.42)] transform-gpu will-change-transform transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+            isContextSidebarOpen
+              ? "translate-x-0"
+              : "pointer-events-none translate-x-[calc(100%+1px)]"
+          }`}
+        >
+          <div className="flex h-14 items-center justify-between border-b border-white/10 px-4">
+            <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em] text-white/70">
+              <PanelRight className="size-4" />
+              Context
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsContextSidebarOpen(false)}
+              aria-label="Close context"
+              className="inline-flex size-8 items-center justify-center rounded-md text-white/60 outline-none transition hover:bg-white/8 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+            {attachedDatasetMetadata ? (
+              <section className="rounded-md border border-cyan-200/18 bg-cyan-300/[0.045] px-3 py-3">
+                <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-cyan-100/72">
+                  <Database className="size-3.5" />
+                  User data
+                </div>
+                <div className="mt-3 min-w-0">
+                  <div className="truncate text-sm text-cyan-50/86">
+                    {attachedDatasetMetadata.name}
+                  </div>
+                  <div className="mt-1 font-mono text-[10px] text-cyan-100/44">
+                    {formatFileSize(attachedDatasetMetadata.size)} · {attachedDatasetMetadata.type}
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
+            {conversationSummary ? (
+              <section className="rounded-md border border-white/12 bg-white/[0.035] px-3 py-3">
+                <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-white/46">
+                  <FileText className="size-3.5" />
+                  Conversation summary
+                </div>
+                <p className="mt-3 text-sm leading-6 text-white/68">{conversationSummary}</p>
+              </section>
+            ) : null}
+          </div>
+        </aside>
+      ) : null}
 
       {isRunProgressMounted ? (
         <div
@@ -717,12 +1148,22 @@ export function AgentGraph() {
             />
           </mask>
           <pattern
-            id="input-texture"
+            id="terminal-texture"
             width="12"
             height="12"
             patternUnits="userSpaceOnUse"
           >
-            <path d="M 12 0 L 0 12" stroke="white" strokeOpacity=".08" strokeWidth=".8" />
+            <path d="M 12 0 L 0 12" stroke="#fbbf24" strokeOpacity=".12" strokeWidth=".8" />
+            <circle cx="3" cy="3" r=".9" fill="#fef08a" fillOpacity=".2" />
+          </pattern>
+          <pattern
+            id="optional-node-texture"
+            width="16"
+            height="16"
+            patternUnits="userSpaceOnUse"
+          >
+            <circle cx="3" cy="3" r="1.2" fill="#5eead4" fillOpacity=".22" />
+            <path d="M 0 16 L 16 0" stroke="#5eead4" strokeOpacity=".08" strokeWidth=".8" />
           </pattern>
           <marker
             id="arrow"
@@ -780,6 +1221,8 @@ export function AgentGraph() {
             return (
               <path
                 key={`${drawKey}-${edge.from}-${edge.to}`}
+                data-edge-from={edge.from}
+                data-edge-to={edge.to}
                 d={connectorPath(start, end)}
                 fill="none"
                 stroke="white"
@@ -793,82 +1236,121 @@ export function AgentGraph() {
         </g>
 
         <g>
-          {laidNodes.map((node, index) => (
-            <g
-              key={`${drawKey}-${node.id}`}
-              className="agent-node-enter"
-              style={{ animationDelay: `${index * 70}ms` }}
-            >
-              <rect
-                x={node.x - node.width / 2}
-                y={node.y - node.height / 2}
-                width={node.width}
-                height={node.height}
-                rx={node.terminal ? "28" : "6"}
-                fill={node.entry ? "#0d0d0d" : node.terminal ? "#101010" : "#050505"}
-                stroke="white"
-                strokeOpacity={node.entry ? ".96" : node.terminal ? ".72" : ".5"}
-                strokeWidth={node.entry ? "1.6" : node.terminal ? "1.25" : "1"}
-              />
-              {node.entry ? (
-                <>
+          {laidNodes.map((node, index) => {
+            const frame = nodeFrameFor(node.visualKind);
+            const radius = nodeRadiusFor(node.visualKind);
+            const isOptional = node.visualKind === "optional";
+            const isTerminal = node.visualKind === "output";
+
+            return (
+              <g
+                key={`${drawKey}-${node.id}`}
+                data-node-id={node.id}
+                data-node-kind={node.visualKind}
+                className="agent-node-enter"
+                style={{ animationDelay: `${index * 70}ms` }}
+              >
+                {isTerminal ? (
                   <rect
-                    x={node.x - node.width / 2 + 10}
-                    y={node.y - node.height / 2 + 10}
-                    width={node.width - 20}
-                    height={node.height - 20}
-                    rx="22"
-                    fill="url(#input-texture)"
-                  />
-                  <rect
-                    x={node.x - node.width / 2 + 14}
-                    y={node.y - node.height / 2 + 14}
-                    width={node.width - 28}
-                    height={node.height - 28}
-                    rx="19"
+                    x={node.x - node.width / 2 - 3}
+                    y={node.y - node.height / 2 - 3}
+                    width={node.width + 6}
+                    height={node.height + 6}
+                    rx={radius + 3}
                     fill="none"
-                    stroke="white"
-                    strokeOpacity=".16"
-                    strokeWidth=".9"
+                    stroke="#fbbf24"
+                    strokeOpacity=".2"
+                    strokeWidth="6"
                   />
-                </>
-              ) : null}
-              <line
-                x1={node.x - node.width / 2 + 20}
-                y1={node.y + 5}
-                x2={node.x + node.width / 2 - 20}
-                y2={node.y + 5}
-                stroke="white"
-                strokeOpacity={node.entry ? ".24" : ".16"}
-              />
-              <text
-                x={node.x}
-                y={node.y - 8}
-                textAnchor="middle"
-                className={
-                  node.entry
-                    ? "fill-white font-sans text-[20px] font-semibold"
-                    : node.terminal
-                    ? "fill-white font-sans text-[18px] font-semibold"
-                    : "fill-white font-sans text-[17px] font-medium"
-                }
-              >
-                {node.model}
-              </text>
-              <text
-                x={node.x}
-                y={node.y + 26}
-                textAnchor="middle"
-                className={
-                  node.entry
-                    ? "fill-white/58 font-mono text-[10px]"
-                    : "fill-white/48 font-mono text-[10px]"
-                }
-              >
-                {node.description}
-              </text>
-            </g>
-          ))}
+                ) : null}
+                <rect
+                  data-node-frame={node.id}
+                  x={node.x - node.width / 2}
+                  y={node.y - node.height / 2}
+                  width={node.width}
+                  height={node.height}
+                  rx={radius}
+                  fill={frame.fill}
+                  stroke={frame.stroke}
+                  strokeOpacity={frame.strokeOpacity}
+                  strokeWidth={frame.strokeWidth}
+                />
+                {isTerminal ? (
+                  <>
+                    <rect
+                      x={node.x - node.width / 2 + 10}
+                      y={node.y - node.height / 2 + 10}
+                      width={node.width - 20}
+                      height={node.height - 20}
+                      rx="22"
+                      fill="url(#terminal-texture)"
+                    />
+                    <rect
+                      x={node.x - node.width / 2 + 14}
+                      y={node.y - node.height / 2 + 14}
+                      width={node.width - 28}
+                      height={node.height - 28}
+                      rx="19"
+                      fill="none"
+                      stroke="#fbbf24"
+                      strokeOpacity=".28"
+                      strokeWidth=".9"
+                    />
+                  </>
+                ) : null}
+                {isOptional ? (
+                  <>
+                    <rect
+                      x={node.x - node.width / 2 + 9}
+                      y={node.y - node.height / 2 + 9}
+                      width={node.width - 18}
+                      height={node.height - 18}
+                      rx="10"
+                      fill="url(#optional-node-texture)"
+                    />
+                    <path
+                      d={`M ${node.x - node.width / 2 + 28} ${node.y - 22} H ${
+                        node.x + node.width / 2 - 28
+                      } M ${node.x - node.width / 2 + 28} ${node.y + 22} H ${
+                        node.x + node.width / 2 - 28
+                      }`}
+                      fill="none"
+                      stroke="#5eead4"
+                      strokeOpacity=".18"
+                      strokeWidth=".9"
+                      strokeDasharray="4 5"
+                    />
+                  </>
+                ) : null}
+                <line
+                  x1={node.x - node.width / 2 + 20}
+                  y1={node.y + 5}
+                  x2={node.x + node.width / 2 - 20}
+                  y2={node.y + 5}
+                  stroke={isTerminal ? "#fbbf24" : isOptional ? "#5eead4" : "white"}
+                  strokeOpacity={frame.dividerOpacity}
+                />
+                <text
+                  x={node.x}
+                  y={node.y - 8}
+                  textAnchor="middle"
+                  fill={frame.titleFill}
+                  className={frame.titleClassName}
+                >
+                  {node.model}
+                </text>
+                <text
+                  x={node.x}
+                  y={node.y + 26}
+                  textAnchor="middle"
+                  fill={frame.descriptionFill}
+                  className="font-mono text-[10px]"
+                >
+                  {node.description}
+                </text>
+              </g>
+            );
+          })}
         </g>
 
         <g>
@@ -894,7 +1376,7 @@ export function AgentGraph() {
                   y={node.y - node.height / 2 - 4}
                   width={node.width + 8}
                   height={node.height + 8}
-                  rx={node.terminal ? "31" : "9"}
+                  rx={nodeRadiusFor(node.visualKind) + 3}
                   fill="none"
                   stroke="white"
                   strokeOpacity="0"

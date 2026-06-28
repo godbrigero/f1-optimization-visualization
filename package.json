@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "node scripts/with-livekit-agent.mjs start",
     "lint": "eslint",
+    "test:agent-graph": "node scripts/agent-graph-user-data-sidecar-test.mjs",
     "test:livekit:synthetic": "node scripts/livekit-synthetic-mic-test.mjs"
   },
   "dependencies": {
