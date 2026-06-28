@@ -1,40 +1,35 @@
 "use client";
 
-import { Activity, GitBranch, PanelLeft, RotateCcw, X } from "lucide-react";
-import { type PointerEvent, type WheelEvent, useEffect, useRef, useState } from "react";
+import { Activity, Boxes, GitBranch, PanelLeft, RotateCcw, X } from "lucide-react";
+import {
+  type PointerEvent,
+  type WheelEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 
-type AgentNode = {
-  id: string;
-  model: string;
-  description: string;
-  terminal?: boolean;
+import {
+  type GenomeEdge,
+  type GenomeNode,
+  type RunDriver,
+  type RunEvent,
+  applyRunEvent,
+  createSimulatedRun,
+  createSocketRun,
+  displayedGenome,
+  initialRunState,
+} from "@/lib/agent-run";
+
+type LaidNode = GenomeNode & {
   x: number;
   y: number;
   width: number;
   height: number;
-};
-
-type AgentEdge = {
-  from: string;
-  to: string;
-  primary?: boolean;
-};
-
-type Iteration = {
-  id: number;
-  name: string;
-  description: string;
-  mermaid: string;
-};
-
-type AddIterationDetail = {
-  description?: string;
-  mermaid?: string;
-  name?: string;
-};
-
-type IterationWindow = Window & {
-  addAgentGraphIteration?: (detail?: AddIterationDetail) => void;
+  entry: boolean;
 };
 
 type GraphViewBox = {
@@ -44,131 +39,89 @@ type GraphViewBox = {
   y: number;
 };
 
-const nodes: AgentNode[] = [
-  {
-    id: "input",
-    model: "Input",
-    description: "request + source data",
-    terminal: true,
-    x: 600,
-    y: 78,
-    width: 330,
-    height: 104,
-  },
-  {
-    id: "ingest",
-    model: "Ingest Agent",
-    description: "captures events",
-    x: 600,
-    y: 190,
-    width: 246,
-    height: 78,
-  },
-  {
-    id: "router",
-    model: "Router Agent",
-    description: "assigns tasks",
-    x: 600,
-    y: 320,
-    width: 246,
-    height: 78,
-  },
-  {
-    id: "planner",
-    model: "Planner Model",
-    description: "builds sequence",
-    x: 318,
-    y: 462,
-    width: 238,
-    height: 78,
-  },
-  {
-    id: "reasoner",
-    model: "Reasoner Model",
-    description: "solves state",
-    x: 600,
-    y: 462,
-    width: 244,
-    height: 78,
-  },
-  {
-    id: "tools",
-    model: "Tool Agent",
-    description: "executes calls",
-    x: 882,
-    y: 462,
-    width: 232,
-    height: 78,
-  },
-  {
-    id: "review",
-    model: "Review Agent",
-    description: "validates output",
-    x: 600,
-    y: 612,
-    width: 246,
-    height: 78,
-  },
-  {
-    id: "output",
-    model: "Output",
-    description: "answer + actions",
-    terminal: true,
-    x: 600,
-    y: 744,
-    width: 250,
-    height: 76,
-  },
-];
+const centerX = 600;
+const topY = 80;
+const rowGap = 132;
+const colGap = 300;
+const terminalWidth = 280;
+const nodeWidth = 244;
+const terminalHeight = 96;
+const nodeHeight = 78;
 
-const edges: AgentEdge[] = [
-  { from: "input", to: "ingest", primary: true },
-  { from: "ingest", to: "router", primary: true },
-  { from: "router", to: "planner", primary: true },
-  { from: "router", to: "reasoner", primary: true },
-  { from: "router", to: "tools", primary: true },
-  { from: "planner", to: "review", primary: true },
-  { from: "reasoner", to: "review", primary: true },
-  { from: "tools", to: "review", primary: true },
-  { from: "review", to: "output", primary: true },
-];
-
-const mermaidGraph = `flowchart TD
-  input([Input<br/>request + source data])
-  ingest["Ingest Agent<br/>captures events"]
-  router["Router Agent<br/>assigns tasks"]
-  planner["Planner Model<br/>builds sequence"]
-  reasoner["Reasoner Model<br/>solves state"]
-  tools["Tool Agent<br/>executes calls"]
-  review["Review Agent<br/>validates output"]
-  output([Output<br/>answer + actions])
-
-  input --> ingest
-  ingest --> router
-  router --> planner
-  router --> reasoner
-  router --> tools
-  planner --> review
-  reasoner --> review
-  tools --> review
-  review --> output
-
-  classDef terminal fill:#101010,stroke:#ffffff,color:#ffffff,stroke-width:1.4px
-  classDef model fill:#050505,stroke:#ffffff,color:#ffffff,stroke-width:1px
-  class input,output terminal
-  class ingest,router,planner,reasoner,tools,review model`;
-
-function getNode(id: string) {
-  const node = nodes.find((agentNode) => agentNode.id === id);
-
-  if (!node) {
-    throw new Error(`Unknown agent node: ${id}`);
-  }
-
-  return node;
+function isPrimaryEdge(edge: GenomeEdge) {
+  return edge.primary !== false;
 }
 
-function edgePoint(from: AgentNode, to: AgentNode) {
+// Longest-path rank from the entry nodes, so any pushed topology can be laid
+// out top-to-bottom without hardcoded coordinates.
+function computeRanks(nodes: GenomeNode[], edges: GenomeEdge[]) {
+  const incoming = new Map<string, string[]>();
+  nodes.forEach((node) => incoming.set(node.id, []));
+  edges.forEach((edge) => {
+    incoming.get(edge.to)?.push(edge.from);
+  });
+
+  const rank = new Map<string, number>();
+
+  function rankOf(id: string, seen: Set<string>): number {
+    const cached = rank.get(id);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (seen.has(id)) {
+      return 0;
+    }
+    seen.add(id);
+
+    let value = 0;
+    for (const from of incoming.get(id) ?? []) {
+      value = Math.max(value, rankOf(from, seen) + 1);
+    }
+
+    rank.set(id, value);
+    return value;
+  }
+
+  nodes.forEach((node) => rankOf(node.id, new Set<string>()));
+  return rank;
+}
+
+function layoutGenome(nodes: GenomeNode[], edges: GenomeEdge[]) {
+  const rank = computeRanks(nodes, edges);
+  const byRank = new Map<number, GenomeNode[]>();
+
+  nodes.forEach((node) => {
+    const value = rank.get(node.id) ?? 0;
+    const group = byRank.get(value);
+    if (group) {
+      group.push(node);
+    } else {
+      byRank.set(value, [node]);
+    }
+  });
+
+  const laidNodes: LaidNode[] = [];
+
+  byRank.forEach((group, value) => {
+    group.forEach((node, index) => {
+      const offset = index - (group.length - 1) / 2;
+      laidNodes.push({
+        ...node,
+        x: centerX + offset * colGap,
+        y: topY + value * rowGap,
+        width: node.terminal ? terminalWidth : nodeWidth,
+        height: node.terminal ? terminalHeight : nodeHeight,
+        entry: Boolean(node.terminal) && value === 0,
+      });
+    });
+  });
+
+  const maxRank = Math.max(0, ...laidNodes.map((node) => rank.get(node.id) ?? 0));
+
+  return { laidNodes, rank, maxRank };
+}
+
+function edgePoint(from: LaidNode, to: LaidNode) {
   const halfWidth = from.width / 2;
   const halfHeight = from.height / 2;
   const dx = to.x - from.x;
@@ -197,21 +150,9 @@ function connectorPath(start: { x: number; y: number }, end: { x: number; y: num
   return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
 }
 
-const flowCycleSeconds = 8;
+const rankStepSeconds = 1.4;
 const edgeTravelSeconds = 0.85;
 const nodeProcessingSeconds = 0.55;
-
-const edgeStartSeconds: Record<string, number> = {
-  "input->ingest": 0,
-  "ingest->router": 1.5,
-  "router->planner": 3,
-  "router->reasoner": 3,
-  "router->tools": 3,
-  "planner->review": 4.6,
-  "reasoner->review": 4.6,
-  "tools->review": 4.6,
-  "review->output": 6.2,
-};
 
 const initialViewBox: GraphViewBox = {
   x: 160,
@@ -223,12 +164,8 @@ const initialViewBox: GraphViewBox = {
 const minZoomWidth = 520;
 const maxZoomWidth = 1400;
 
-function edgeKey(edge: AgentEdge) {
-  return `${edge.from}->${edge.to}`;
-}
-
-function edgeBegin(edge: AgentEdge) {
-  return edgeStartSeconds[edgeKey(edge)] ?? 0;
+function formatFitness(fitness: number) {
+  return `${Math.round(fitness * 100)}%`;
 }
 
 function isDefaultViewBox(viewBox: GraphViewBox) {
@@ -240,18 +177,22 @@ function isDefaultViewBox(viewBox: GraphViewBox) {
   );
 }
 
+function createDriver(): RunDriver {
+  const socketUrl = process.env.NEXT_PUBLIC_AGENT_RUN_WS;
+  // Swap point: set NEXT_PUBLIC_AGENT_RUN_WS to the Python brain's WebSocket to
+  // drive the page from the real backend instead of the scripted simulation.
+  return socketUrl ? createSocketRun(socketUrl) : createSimulatedRun();
+}
+
 export function AgentGraph() {
+  const [runState, dispatch] = useReducer(applyRunEvent, initialRunState);
+  const emit = useCallback((event: RunEvent) => dispatch(event), []);
+  const driverRef = useRef<RunDriver | null>(null);
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isRunProgressMounted, setIsRunProgressMounted] = useState(false);
   const [isRunProgressVisible, setIsRunProgressVisible] = useState(false);
-  const [iterations, setIterations] = useState<Iteration[]>([
-    {
-      id: 1,
-      name: "Iteration 1",
-      description: "Six-node procedural pipeline",
-      mermaid: mermaidGraph,
-    },
-  ]);
+  const [manualSelection, setManualSelection] = useState<number | null>(null);
   const [conversationSummary] = useState(() => {
     if (typeof window === "undefined") {
       return "";
@@ -259,7 +200,6 @@ export function AgentGraph() {
 
     return window.sessionStorage.getItem("f1-agent-conversation-summary") ?? "";
   });
-  const [activeIterationId, setActiveIterationId] = useState(1);
   const [viewBox, setViewBox] = useState<GraphViewBox>(initialViewBox);
   const [isPanning, setIsPanning] = useState(false);
   const lastPointerPosition = useRef<{ x: number; y: number } | null>(null);
@@ -268,37 +208,29 @@ export function AgentGraph() {
   const runProgressAnimationFrame = useRef<number | null>(null);
   const runProgressCloseTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Start the run (simulation, or the real backend if the env URL is set), and
+  // allow manual/backend injection through a window hook + custom event.
   useEffect(() => {
-    function appendIteration(detail: AddIterationDetail = {}) {
-      setIterations((currentIterations) => {
-        const nextId = Math.max(0, ...currentIterations.map((iteration) => iteration.id)) + 1;
+    const driver = createDriver();
+    driverRef.current = driver;
+    driver.start(emit);
 
-        setActiveIterationId(nextId);
-        setIsSidebarOpen(true);
-
-        return [
-          ...currentIterations,
-          {
-            id: nextId,
-            name: detail.name ?? `Iteration ${nextId}`,
-            description: detail.description ?? "LLM generated graph",
-            mermaid: detail.mermaid ?? mermaidGraph,
-          },
-        ];
-      });
+    function handleInjectedEvent(event: Event) {
+      const customEvent = event as CustomEvent<RunEvent>;
+      if (customEvent.detail) {
+        emit(customEvent.detail);
+      }
     }
 
-    function handleAddIteration(event: Event) {
-      const customEvent = event as CustomEvent<AddIterationDetail>;
-      appendIteration(customEvent.detail);
-    }
-
-    const iterationWindow = window as IterationWindow;
-
-    iterationWindow.addAgentGraphIteration = appendIteration;
-    window.addEventListener("agent-graph:add-iteration", handleAddIteration);
+    const runWindow = window as Window & { f1AgentRun?: { emit: (event: RunEvent) => void } };
+    runWindow.f1AgentRun = { emit };
+    window.addEventListener("agent-run:event", handleInjectedEvent);
 
     return () => {
+      driver.stop();
+      delete runWindow.f1AgentRun;
+      window.removeEventListener("agent-run:event", handleInjectedEvent);
+
       if (zoomAnimationFrame.current) {
         cancelAnimationFrame(zoomAnimationFrame.current);
       }
@@ -308,15 +240,68 @@ export function AgentGraph() {
       if (runProgressCloseTimeout.current) {
         clearTimeout(runProgressCloseTimeout.current);
       }
-
-      delete iterationWindow.addAgentGraphIteration;
-      window.removeEventListener("agent-graph:add-iteration", handleAddIteration);
     };
-  }, []);
+  }, [emit]);
 
   useEffect(() => {
     viewBoxRef.current = viewBox;
   }, [viewBox]);
+
+  function replayRun() {
+    driverRef.current?.stop();
+    setManualSelection(null);
+    const driver = createSimulatedRun();
+    driverRef.current = driver;
+    driver.start(emit);
+  }
+
+  // The generation in view follows the run, unless the user manually picked one.
+  const viewGenerationId = manualSelection ?? runState.activeGenerationId;
+  const viewedGeneration =
+    runState.generations.find((generation) => generation.id === viewGenerationId) ?? null;
+
+  // What's actually on the graph right now: a live candidate if we're scoring
+  // one, otherwise the generation the user is viewing.
+  const { drawGenome, drawKey } = useMemo(() => {
+    if (runState.candidate) {
+      return {
+        drawGenome: { nodes: runState.candidate.nodes, edges: runState.candidate.edges },
+        drawKey: `candidate-${runState.candidate.label}`,
+      };
+    }
+    if (viewedGeneration) {
+      return {
+        drawGenome: { nodes: viewedGeneration.nodes, edges: viewedGeneration.edges },
+        drawKey: `gen-${viewedGeneration.id}`,
+      };
+    }
+    const fallback = displayedGenome(runState);
+    return {
+      drawGenome: fallback,
+      drawKey: "empty",
+    };
+  }, [runState, viewedGeneration]);
+
+  const { laidNodes, rank, maxRank } = useMemo(
+    () => layoutGenome(drawGenome?.nodes ?? [], drawGenome?.edges ?? []),
+    [drawGenome],
+  );
+
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, LaidNode>();
+    laidNodes.forEach((node) => map.set(node.id, node));
+    return map;
+  }, [laidNodes]);
+
+  const drawEdges = drawGenome?.edges ?? [];
+
+  const flowCycleSeconds =
+    maxRank * rankStepSeconds + edgeTravelSeconds + nodeProcessingSeconds + 1.2;
+
+  const edgeBeginFor = (edge: GenomeEdge) => (rank.get(edge.from) ?? 0) * rankStepSeconds;
+
+  const fitnessBarPercent = Math.round((runState.bestFitness || 0) * 100);
+  const thresholdPercent = Math.round(runState.threshold * 100);
 
   function animateViewBox(targetViewBox: GraphViewBox) {
     if (zoomAnimationFrame.current) {
@@ -455,12 +440,43 @@ export function AgentGraph() {
     >
       <h1 className="sr-only">Interconnected agent node graph</h1>
 
-      {conversationSummary ? (
-        <section className="absolute left-1/2 top-5 z-20 w-[min(760px,calc(100vw-2.5rem))] -translate-x-1/2 rounded-md border border-white/14 bg-black/82 px-4 py-3 shadow-[0_18px_50px_rgba(0,0,0,0.38)] backdrop-blur-xl">
+      {/* Always-on run HUD: current phase + fitness vs. threshold. */}
+      <section className="pointer-events-none absolute left-1/2 top-5 z-20 w-[min(560px,calc(100vw-2.5rem))] -translate-x-1/2 rounded-md border border-white/14 bg-black/82 px-4 py-3 shadow-[0_18px_50px_rgba(0,0,0,0.38)] backdrop-blur-xl">
+        <div className="flex items-center justify-between gap-3">
           <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/38">
+            {runState.status === "complete" ? "Converged" : "Evolving swarm"}
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/38">
+            best {formatFitness(runState.bestFitness)} · target {thresholdPercent}%
+          </div>
+        </div>
+        <p className="mt-2 truncate text-sm leading-6 text-white/82">{runState.phase}</p>
+        <div className="relative mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+          <div
+            className="h-full rounded-full bg-white/80 transition-[width] duration-500 ease-out"
+            style={{ width: `${fitnessBarPercent}%` }}
+          />
+          <div
+            className="absolute top-0 h-full w-px bg-white/60"
+            style={{ left: `${thresholdPercent}%` }}
+          />
+        </div>
+        {runState.candidate ? (
+          <div className="mt-2 font-mono text-[10px] text-white/50">
+            evaluating {runState.candidate.label}
+            {runState.candidate.fitness !== null
+              ? ` — scored ${formatFitness(runState.candidate.fitness)}`
+              : " — scoring…"}
+          </div>
+        ) : null}
+      </section>
+
+      {conversationSummary ? (
+        <section className="pointer-events-none absolute bottom-5 left-1/2 z-20 w-[min(620px,calc(100vw-2.5rem))] -translate-x-1/2 rounded-md border border-white/12 bg-black/78 px-4 py-2.5 backdrop-blur-xl">
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-white/34">
             Conversation summary
           </div>
-          <p className="mt-2 line-clamp-3 text-sm leading-6 text-white/72">{conversationSummary}</p>
+          <p className="mt-1 line-clamp-2 text-xs leading-5 text-white/64">{conversationSummary}</p>
         </section>
       ) : null}
 
@@ -468,7 +484,7 @@ export function AgentGraph() {
         type="button"
         aria-label="Open iterations"
         onClick={() => setIsSidebarOpen(true)}
-        className={`absolute left-5 top-5 z-20 inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35 ${
+        className={`absolute left-5 top-5 z-30 inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35 ${
           isSidebarOpen ? "pointer-events-none opacity-0" : "opacity-100"
         }`}
       >
@@ -477,7 +493,7 @@ export function AgentGraph() {
       </button>
 
       <div
-        className={`absolute right-5 top-5 z-20 flex items-center gap-2 transition-opacity ${
+        className={`absolute right-5 top-5 z-30 flex items-center gap-2 transition-opacity ${
           isRunProgressActive ? "pointer-events-none opacity-0" : "opacity-100"
         }`}
       >
@@ -494,6 +510,15 @@ export function AgentGraph() {
 
         <button
           type="button"
+          onClick={replayRun}
+          className="inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
+        >
+          <RotateCcw className="size-4" />
+          Replay
+        </button>
+
+        <button
+          type="button"
           aria-label="Open run progress"
           onClick={openRunProgress}
           className="inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
@@ -506,7 +531,7 @@ export function AgentGraph() {
       <aside
         aria-label="Iterations"
         aria-hidden={!isSidebarOpen}
-        className={`absolute inset-y-0 left-0 z-30 w-[300px] border-r border-white/12 bg-black/92 transform-gpu will-change-transform transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+        className={`absolute inset-y-0 left-0 z-40 flex w-[300px] flex-col border-r border-white/12 bg-black/92 transform-gpu will-change-transform transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
           isSidebarOpen
             ? "translate-x-0"
             : "pointer-events-none -translate-x-[calc(100%+1px)]"
@@ -515,7 +540,7 @@ export function AgentGraph() {
           <div className="flex h-14 items-center justify-between border-b border-white/10 px-4">
             <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em] text-white/70">
               <GitBranch className="size-4" />
-              Iterations
+              Generations
             </div>
             <button
               type="button"
@@ -527,41 +552,75 @@ export function AgentGraph() {
             </button>
           </div>
 
-          <div className="px-4 py-3">
+          <div className="flex-1 overflow-y-auto px-4 py-3">
             <div className="space-y-2">
-              {iterations.map((iteration) => (
+              {runState.generations.length === 0 ? (
+                <div className="rounded-md border border-dashed border-white/12 px-3 py-4 text-center font-mono text-[10px] uppercase tracking-[0.14em] text-white/30">
+                  awaiting first generation
+                </div>
+              ) : null}
+              {runState.generations.map((generation) => (
                 <button
-                  key={iteration.id}
+                  key={generation.id}
                   type="button"
-                  onClick={() => setActiveIterationId(iteration.id)}
+                  onClick={() => setManualSelection(generation.id)}
                   className={`group w-full rounded-md border px-3 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-white/35 ${
-                    iteration.id === activeIterationId
+                    generation.id === viewGenerationId
                       ? "border-white/44 bg-white/[0.075] text-white"
                       : "border-white/12 bg-black text-white/54 hover:border-white/28 hover:bg-white/[0.035] hover:text-white/80"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{iteration.name}</div>
+                      <div className="truncate text-sm font-medium">{generation.name}</div>
                       <div className="mt-1 truncate text-xs text-white/38">
-                        {iteration.description}
+                        {generation.description}
                       </div>
                     </div>
                     <div className="shrink-0 rounded-sm border border-white/12 px-1.5 py-0.5 font-mono text-[10px] text-white/36">
-                      {String(iteration.id).padStart(2, "0")}
+                      {formatFitness(generation.fitness)}
                     </div>
                   </div>
                   <div className="mt-3 flex items-center gap-2">
                     <span
                       className={`h-px flex-1 ${
-                        iteration.id === activeIterationId ? "bg-white/22" : "bg-white/10"
+                        generation.id === viewGenerationId ? "bg-white/22" : "bg-white/10"
                       }`}
                     />
                     <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-white/30">
-                      {iteration.id === activeIterationId ? "active" : "select"}
+                      {generation.id === viewGenerationId ? "active" : "select"}
                     </span>
                   </div>
                 </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="border-t border-white/10 px-4 py-3">
+            <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-white/50">
+              <Boxes className="size-3.5" />
+              Corpus of agents · {runState.corpus.length}
+            </div>
+            <div className="space-y-1">
+              {runState.corpus.map((agent) => (
+                <div
+                  key={agent.id}
+                  className="flex items-center justify-between gap-2 rounded-sm border border-white/10 px-2 py-1.5"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-xs text-white/72">{agent.id}</div>
+                    <div className="truncate font-mono text-[9px] text-white/34">{agent.model}</div>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-sm px-1 py-0.5 font-mono text-[8px] uppercase tracking-[0.12em] ${
+                      agent.origin === "grown"
+                        ? "border border-white/40 text-white/80"
+                        : "border border-white/12 text-white/36"
+                    }`}
+                  >
+                    {agent.origin}
+                  </span>
+                </div>
               ))}
             </div>
           </div>
@@ -570,7 +629,7 @@ export function AgentGraph() {
       {isRunProgressMounted ? (
         <div
           aria-label="Run Progress"
-          className={`absolute right-5 top-5 z-30 w-[320px] origin-top-right transform-gpu rounded-lg border border-white/14 bg-black/95 shadow-2xl shadow-black/40 will-change-transform transition-[transform,opacity] duration-100 ease-out ${
+          className={`absolute right-5 top-5 z-40 w-[340px] origin-top-right transform-gpu rounded-lg border border-white/14 bg-black/95 shadow-2xl shadow-black/40 will-change-transform transition-[transform,opacity] duration-100 ease-out ${
             isRunProgressVisible
               ? "translate-y-0 scale-100 opacity-100"
               : "-translate-y-1 scale-[0.99] opacity-0"
@@ -591,21 +650,33 @@ export function AgentGraph() {
             </button>
           </div>
 
-          <div className="space-y-3 px-4 py-4">
-            {["Input queued", "Ingest processed", "Router dispatched", "Parallel agents running", "Review pending", "Output waiting"].map(
-              (step, index) => (
-                <div key={step} className="flex items-center gap-3">
-                  <div
-                    className={`size-2 rounded-full ${
-                      index < 3 ? "bg-white" : index === 3 ? "bg-white/55" : "bg-white/18"
-                    }`}
-                  />
-                  <div className={index < 4 ? "text-sm text-white/78" : "text-sm text-white/36"}>
-                    {step}
-                  </div>
-                </div>
-              ),
-            )}
+          <div className="border-b border-white/10 px-4 py-3">
+            <div className="truncate text-sm text-white/72">{runState.phase}</div>
+            <div className="mt-1 font-mono text-[11px] text-white/46">
+              {runState.problemLabel || "—"}
+            </div>
+          </div>
+
+          <div className="max-h-[280px] space-y-2.5 overflow-y-auto px-4 py-4">
+            {runState.log.length === 0 ? (
+              <div className="font-mono text-[11px] text-white/36">no activity yet</div>
+            ) : null}
+            {runState.log.map((entry) => (
+              <div key={entry.id} className="flex items-start gap-3">
+                <div
+                  className={`mt-1.5 size-2 shrink-0 rounded-full ${
+                    entry.kind === "success"
+                      ? "bg-white"
+                      : entry.kind === "corpus"
+                        ? "bg-white/70"
+                        : entry.kind === "score"
+                          ? "bg-white/55"
+                          : "bg-white/30"
+                  }`}
+                />
+                <div className="text-sm leading-5 text-white/74">{entry.text}</div>
+              </div>
+            ))}
           </div>
         </div>
       ) : null}
@@ -694,42 +765,52 @@ export function AgentGraph() {
           />
         </g>
         <g>
-          {edges.map((edge) => {
-            const from = getNode(edge.from);
-            const to = getNode(edge.to);
+          {drawEdges.map((edge) => {
+            const from = nodeMap.get(edge.from);
+            const to = nodeMap.get(edge.to);
+
+            if (!from || !to) {
+              return null;
+            }
+
             const start = edgePoint(from, to);
             const end = edgePoint(to, from);
+            const primary = isPrimaryEdge(edge);
 
             return (
               <path
-                key={`${edge.from}-${edge.to}`}
+                key={`${drawKey}-${edge.from}-${edge.to}`}
                 d={connectorPath(start, end)}
                 fill="none"
                 stroke="white"
-                strokeOpacity={edge.primary ? ".48" : ".22"}
-                strokeWidth={edge.primary ? "1.35" : "1"}
+                strokeOpacity={primary ? ".48" : ".22"}
+                strokeWidth={primary ? "1.35" : "1"}
                 strokeLinecap="round"
-                markerEnd={edge.primary ? "url(#arrow)" : "url(#arrow-muted)"}
+                markerEnd={primary ? "url(#arrow)" : "url(#arrow-muted)"}
               />
             );
           })}
         </g>
 
         <g>
-          {nodes.map((node) => (
-            <g key={node.id}>
+          {laidNodes.map((node, index) => (
+            <g
+              key={`${drawKey}-${node.id}`}
+              className="agent-node-enter"
+              style={{ animationDelay: `${index * 70}ms` }}
+            >
               <rect
                 x={node.x - node.width / 2}
                 y={node.y - node.height / 2}
                 width={node.width}
                 height={node.height}
                 rx={node.terminal ? "28" : "6"}
-                fill={node.id === "input" ? "#0d0d0d" : node.terminal ? "#101010" : "#050505"}
+                fill={node.entry ? "#0d0d0d" : node.terminal ? "#101010" : "#050505"}
                 stroke="white"
-                strokeOpacity={node.id === "input" ? ".96" : node.terminal ? ".72" : ".5"}
-                strokeWidth={node.id === "input" ? "1.6" : node.terminal ? "1.25" : "1"}
+                strokeOpacity={node.entry ? ".96" : node.terminal ? ".72" : ".5"}
+                strokeWidth={node.entry ? "1.6" : node.terminal ? "1.25" : "1"}
               />
-              {node.id === "input" ? (
+              {node.entry ? (
                 <>
                   <rect
                     x={node.x - node.width / 2 + 10}
@@ -758,14 +839,14 @@ export function AgentGraph() {
                 x2={node.x + node.width / 2 - 20}
                 y2={node.y + 5}
                 stroke="white"
-                strokeOpacity={node.id === "input" ? ".24" : ".16"}
+                strokeOpacity={node.entry ? ".24" : ".16"}
               />
               <text
                 x={node.x}
                 y={node.y - 8}
                 textAnchor="middle"
                 className={
-                  node.id === "input"
+                  node.entry
                     ? "fill-white font-sans text-[20px] font-semibold"
                     : node.terminal
                     ? "fill-white font-sans text-[18px] font-semibold"
@@ -779,7 +860,7 @@ export function AgentGraph() {
                 y={node.y + 26}
                 textAnchor="middle"
                 className={
-                  node.id === "input"
+                  node.entry
                     ? "fill-white/58 font-mono text-[10px]"
                     : "fill-white/48 font-mono text-[10px]"
                 }
@@ -791,11 +872,16 @@ export function AgentGraph() {
         </g>
 
         <g>
-          {edges
-            .filter((edge) => edge.primary)
+          {drawEdges
+            .filter((edge) => isPrimaryEdge(edge))
             .map((edge) => {
-              const node = getNode(edge.to);
-              const beginTime = edgeBegin(edge);
+              const node = nodeMap.get(edge.to);
+
+              if (!node) {
+                return null;
+              }
+
+              const beginTime = edgeBeginFor(edge);
               const holdStart = (beginTime + edgeTravelSeconds) / flowCycleSeconds;
               const holdVisible = (beginTime + edgeTravelSeconds + 0.12) / flowCycleSeconds;
               const holdEnd =
@@ -803,7 +889,7 @@ export function AgentGraph() {
 
               return (
                 <rect
-                  key={`processing-${edge.from}-${edge.to}`}
+                  key={`processing-${drawKey}-${edge.from}-${edge.to}`}
                   x={node.x - node.width / 2 - 4}
                   y={node.y - node.height / 2 - 4}
                   width={node.width + 8}
@@ -836,21 +922,26 @@ export function AgentGraph() {
         </g>
 
         <g>
-          {edges
-            .filter((edge) => edge.primary)
+          {drawEdges
+            .filter((edge) => isPrimaryEdge(edge))
             .map((edge) => {
-              const from = getNode(edge.from);
-              const to = getNode(edge.to);
+              const from = nodeMap.get(edge.from);
+              const to = nodeMap.get(edge.to);
+
+              if (!from || !to) {
+                return null;
+              }
+
               const start = edgePoint(from, to);
               const end = edgePoint(to, from);
-              const beginTime = edgeBegin(edge);
+              const beginTime = edgeBeginFor(edge);
               const moveStart = beginTime / flowCycleSeconds;
               const moveEnd = (beginTime + edgeTravelSeconds) / flowCycleSeconds;
               const holdEnd =
                 (beginTime + edgeTravelSeconds + nodeProcessingSeconds) / flowCycleSeconds;
 
               return (
-                <circle key={`flow-${edge.from}-${edge.to}`} r="3.4" fill="white" opacity=".82">
+                <circle key={`flow-${drawKey}-${edge.from}-${edge.to}`} r="3.4" fill="white" opacity=".82">
                   <animateMotion
                     dur={`${flowCycleSeconds}s`}
                     begin="0s"
