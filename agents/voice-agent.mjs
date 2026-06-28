@@ -80,7 +80,12 @@ function boundedNumberEnv(name, fallback, min, max) {
 const livekitUrl = requiredEnv("LIVEKIT_URL");
 const livekitApiKey = requiredEnv("LIVEKIT_API_KEY");
 const livekitApiSecret = requiredEnv("LIVEKIT_API_SECRET");
-const digitalOceanApiKey = requiredEnv("DIGITALOCEAN_MODEL_API_KEY");
+const useHardcodedBronFlow =
+  (process.env.NEXT_PUBLIC_HARDCODED_BRON_FLOW ??
+    process.env.LIVEKIT_AGENT_HARDCODED_BRON_FLOW) !== "false";
+const digitalOceanApiKey = useHardcodedBronFlow
+  ? process.env.DIGITALOCEAN_MODEL_API_KEY
+  : requiredEnv("DIGITALOCEAN_MODEL_API_KEY");
 const digitalOceanBaseUrl =
   process.env.DIGITALOCEAN_MODEL_BASE_URL ?? "https://inference.do-ai.run/v1";
 const chatModel = process.env.DIGITALOCEAN_CHAT_MODEL ?? "qwen3-coder-flash";
@@ -99,6 +104,10 @@ const START_AGENT_WORK_TOPIC = "lebronsseiur.start_agent_work";
 const VOICE_DEBUG_TOPIC = "lebronsseiur.voice_debug";
 const START_AGENT_WORK_PHRASE =
   "Ok, redirecting you to Coach Bron. Stand by for context switch.";
+const HARDCODED_BRON_UPLOAD_RESPONSE =
+  "Ok, I can guide you through the process to minimize Carbon Emissions while also minimizing cost and maximizing profits. First, it's always helpful if there are extra files involved with extra context so go ahead and upload any files you think might be relevant to this task.";
+const HARDCODED_BRON_TRANSFER_RESPONSE =
+  "Ok, I can now retransfer you to Coach Bron.";
 const turnDetectionMode = process.env.LIVEKIT_AGENT_TURN_DETECTION || "stt";
 const vadConfig = {
   minSpeechDurationMs: boundedNumberEnv(
@@ -235,16 +244,18 @@ export default defineAgent({
           language_hint: "en",
         },
       }),
-      llm: new OpenAILLM({
-        apiKey: digitalOceanApiKey,
-        baseURL: digitalOceanBaseUrl,
-        model: chatModel,
-        temperature: 0.35,
-        maxCompletionTokens: optionalNumberEnv(
-          "LIVEKIT_AGENT_MAX_COMPLETION_TOKENS",
-          80,
-        ),
-      }),
+      llm: useHardcodedBronFlow
+        ? undefined
+        : new OpenAILLM({
+            apiKey: digitalOceanApiKey,
+            baseURL: digitalOceanBaseUrl,
+            model: chatModel,
+            temperature: 0.35,
+            maxCompletionTokens: optionalNumberEnv(
+              "LIVEKIT_AGENT_MAX_COMPLETION_TOKENS",
+              80,
+            ),
+          }),
       tts: new inference.TTS({
         model: ttsModel,
         voice: ttsVoice,
@@ -264,8 +275,8 @@ export default defineAgent({
       turnHandling: {
         turnDetection: turnDetectionMode,
         preemptiveGeneration: {
-          enabled: true,
-          preemptiveTts: true,
+          enabled: !useHardcodedBronFlow,
+          preemptiveTts: !useHardcodedBronFlow,
           maxSpeechDuration: 8000,
           maxRetries: 3,
         },
@@ -345,7 +356,98 @@ export default defineAgent({
       sendVoiceDebugEvent("session_error", payload);
     });
 
-    const agent = new voice.Agent({
+    let hardcodedBronTurnCount = 0;
+
+    function sendHardcodedToolMessage(topic, body, event) {
+      void ctx.room.localParticipant
+        ?.sendText(JSON.stringify(body), { topic })
+        .then(() => {
+          const payload = { topic };
+
+          logVoiceEvent(event, payload);
+          sendVoiceDebugEvent(event, payload);
+        })
+        .catch((error) => {
+          const payload = {
+            error: describeError(error),
+            topic,
+          };
+
+          logVoiceEvent(`${event}_failed`, payload);
+          sendVoiceDebugEvent(`${event}_failed`, payload);
+        });
+    }
+
+    class BronAgent extends voice.Agent {
+      async onUserTurnCompleted(_chatCtx, newMessage) {
+        if (!useHardcodedBronFlow) {
+          return;
+        }
+
+        const transcript = newMessage.textContent ?? "";
+
+        if (!transcript.trim()) {
+          throw new voice.StopResponse();
+        }
+
+        hardcodedBronTurnCount += 1;
+
+        if (hardcodedBronTurnCount === 1) {
+          const payload = {
+            turn: hardcodedBronTurnCount,
+            transcript: transcript.slice(0, 120),
+          };
+
+          logVoiceEvent("hardcoded_bron_upload_turn", payload);
+          sendVoiceDebugEvent("hardcoded_bron_upload_turn", payload);
+
+          const speechHandle = this.session.say(HARDCODED_BRON_UPLOAD_RESPONSE, {
+            addToChatCtx: true,
+            allowInterruptions: false,
+          });
+          speechHandle.addDoneCallback(() => {
+            sendHardcodedToolMessage(
+              CUSTOM_DATASET_UPLOAD_TOPIC,
+              { type: "show_custom_dataset_upload" },
+              "tool_sent_show_custom_dataset_upload",
+            );
+          });
+
+          throw new voice.StopResponse();
+        }
+
+        if (hardcodedBronTurnCount === 2) {
+          const payload = {
+            turn: hardcodedBronTurnCount,
+            transcript: transcript.slice(0, 120),
+          };
+
+          logVoiceEvent("hardcoded_bron_transfer_turn", payload);
+          sendVoiceDebugEvent("hardcoded_bron_transfer_turn", payload);
+
+          const speechHandle = this.session.say(
+            HARDCODED_BRON_TRANSFER_RESPONSE,
+            {
+              addToChatCtx: true,
+              allowInterruptions: false,
+            },
+          );
+          speechHandle.addDoneCallback(() => {
+            sendHardcodedToolMessage(
+              START_AGENT_WORK_TOPIC,
+              { type: "start_agent_work" },
+              "tool_sent_start_agent_work",
+            );
+          });
+
+          throw new voice.StopResponse();
+        }
+
+        throw new voice.StopResponse();
+      }
+    }
+
+    const agent = new BronAgent({
       id: agentId,
       instructions: `You are Bron, a fast voice agent for a problem-solving app. Speak in short, confident sentences under 18 words unless asked for detail. Ask one clear follow-up when the user is vague. Do not mention implementation details unless asked.
 
@@ -403,6 +505,7 @@ Tool rules:
       chatModel,
       sttModel,
       ttsModel,
+      hardcodedBronFlow: useHardcodedBronFlow,
       turnDetectionMode,
       vadConfig,
       eotTimeoutMs,

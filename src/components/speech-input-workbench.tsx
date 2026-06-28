@@ -45,6 +45,8 @@ const CONVERSATION_MESSAGES_STORAGE_KEY = "f1-agent-conversation-messages";
 const AGENTS_ROUTE = "/agents";
 const START_AGENT_WORK_HANDOFF_DELAY_MS = 4200;
 const DEFAULT_CONVERSATION_SUMMARY = "The user asked Bron to start working.";
+const USE_HARDCODED_BRON_AGENT_FLOW =
+  process.env.NEXT_PUBLIC_HARDCODED_BRON_FLOW !== "false";
 const DEFAULT_VOICE_DEBUG_CONFIG = {
   activationThreshold: voiceAgentDefaults.vad.activationThreshold,
   eotTimeoutMs: voiceAgentDefaults.eotTimeoutMs,
@@ -1745,6 +1747,7 @@ export function SpeechInputWorkbench() {
       if (bronIdleHintTimerRef.current) {
         window.clearTimeout(bronIdleHintTimerRef.current);
       }
+
     };
   }, [router]);
 
@@ -1984,6 +1987,10 @@ export function SpeechInputWorkbench() {
 
     if (role === "user") {
       spokenInputRef.current = transcript;
+      if (USE_HARDCODED_BRON_AGENT_FLOW) {
+        return;
+      }
+
       if (mentionsStartAgentWork(transcript)) {
         addVoiceDebugEntry(
           "client_handoff_fallback",
