@@ -145,6 +145,57 @@ function logVoiceEvent(event, payload = {}) {
   console.info(`[voice-agent] ${event}`, payload);
 }
 
+function describeError(error) {
+  if (error instanceof Error) {
+    const statusCode = error.statusCode ?? error.status;
+    const requestId = error.requestId;
+    const details = [
+      error.message,
+      statusCode ? `status ${statusCode}` : null,
+      requestId ? `request ${requestId}` : null,
+    ].filter(Boolean);
+
+    return details.join(" | ");
+  }
+
+  if (error && typeof error === "object") {
+    const fields = Object.fromEntries(
+      Object.getOwnPropertyNames(error).map((key) => [key, error[key]]),
+    );
+    const nestedError =
+      error.error && typeof error.error === "object" ? error.error : undefined;
+    const nestedFields = nestedError
+      ? Object.fromEntries(
+          Object.getOwnPropertyNames(nestedError).map((key) => [
+            key,
+            nestedError[key],
+          ]),
+        )
+      : {};
+    const statusCode =
+      error.statusCode ??
+      error.status ??
+      fields.statusCode ??
+      fields.status ??
+      nestedFields.statusCode ??
+      nestedFields.status;
+    const message =
+      typeof error.message === "string"
+        ? error.message
+        : typeof fields.message === "string"
+          ? fields.message
+          : typeof nestedFields.message === "string"
+            ? nestedFields.message
+            : JSON.stringify({ ...fields, error: nestedFields });
+
+    return [message, statusCode ? `status ${statusCode}` : null]
+      .filter(Boolean)
+      .join(" | ");
+  }
+
+  return String(error);
+}
+
 export default defineAgent({
   entry: async (ctx) => {
     function sendVoiceDebugEvent(event, payload = {}) {
@@ -286,10 +337,7 @@ export default defineAgent({
     });
     session.on(voice.AgentSessionEventTypes.Error, (event) => {
       const payload = {
-        error:
-          event.error instanceof Error
-            ? event.error.message
-            : String(event.error),
+        error: describeError(event.error),
         source: event.source?.constructor?.name,
       };
 
