@@ -129,7 +129,7 @@ export default defineAgent({
     const agent = new voice.Agent({
       id: agentId,
       instructions:
-        "You are a fast voice agent for an F1 optimization app. Keep replies short, natural, and useful. Ask one clear follow-up when the user is vague. Do not mention implementation details unless asked.",
+        "You are Bron, a fast voice agent for a problem-solving app. Speak in short, confident sentences under 18 words unless asked for detail. Ask one clear follow-up when the user is vague. Do not mention implementation details unless asked.",
     });
 
     await session.start({

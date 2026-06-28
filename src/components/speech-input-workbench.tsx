@@ -8,6 +8,9 @@ import {
   RoomEvent,
   Track,
   type Participant,
+  type RemoteParticipant,
+  type RemoteTrackPublication,
+  type RemoteAudioTrack,
   type RemoteTrack,
   type TranscriptionSegment,
 } from "livekit-client";
@@ -44,6 +47,7 @@ export function SpeechInputWorkbench() {
   const responseTimerRef = useRef<number | null>(null);
   const liveKitRoomRef = useRef<Room | null>(null);
   const remoteAudioElementsRef = useRef<HTMLMediaElement[]>([]);
+  const attachedAudioTrackIdsRef = useRef<Set<string>>(new Set());
   const [fileName, setFileName] = useState("");
   const [isListening, setIsListening] = useState(false);
   const [isConnectingVoice, setIsConnectingVoice] = useState(false);
@@ -109,6 +113,7 @@ export function SpeechInputWorkbench() {
   function detachRemoteAudio() {
     remoteAudioElementsRef.current.forEach((element) => element.remove());
     remoteAudioElementsRef.current = [];
+    attachedAudioTrackIdsRef.current.clear();
   }
 
   async function stopLiveKitRoom() {
@@ -126,14 +131,31 @@ export function SpeechInputWorkbench() {
     room.disconnect();
   }
 
-  function handleTrackSubscribed(track: RemoteTrack) {
+  function handleTrackSubscribed(
+    track: RemoteTrack,
+    _publication?: RemoteTrackPublication,
+    participant?: RemoteParticipant,
+  ) {
     if (track.kind !== Track.Kind.Audio) {
       return;
     }
 
-    const element = track.attach();
+    const trackId = track.sid ?? track.mediaStreamTrack.id;
+
+    if (attachedAudioTrackIdsRef.current.has(trackId)) {
+      return;
+    }
+
+    attachedAudioTrackIdsRef.current.add(trackId);
+    participant?.setVolume(1);
+    const audioTrack = track as RemoteAudioTrack;
+    audioTrack.setVolume(1);
+
+    const element = audioTrack.attach();
     element.autoplay = true;
     element.volume = 1;
+    element.muted = false;
+    element.setAttribute("data-bron-audio", trackId);
     element.style.position = "absolute";
     element.style.width = "1px";
     element.style.height = "1px";
@@ -142,12 +164,19 @@ export function SpeechInputWorkbench() {
     document.body.appendChild(element);
     remoteAudioElementsRef.current = [...remoteAudioElementsRef.current, element];
 
-    void element.play().catch(() => {
-      showTemporaryResponse("Audio is blocked. Click the voice button again to resume playback.");
-    });
+    void liveKitRoomRef.current
+      ?.startAudio()
+      .then(() => element.play())
+      .then(() => {
+        showTemporaryResponse("Bron audio connected.", 2200);
+      })
+      .catch(() => {
+        showTemporaryResponse("Audio is blocked. Click the voice button again to resume playback.");
+      });
   }
 
   function handleTrackUnsubscribed(track: RemoteTrack) {
+    attachedAudioTrackIdsRef.current.delete(track.sid ?? track.mediaStreamTrack.id);
     track.detach().forEach((element) => {
       element.remove();
       remoteAudioElementsRef.current = remoteAudioElementsRef.current.filter((audio) => audio !== element);
@@ -215,7 +244,10 @@ export function SpeechInputWorkbench() {
       room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
         if (!room.canPlaybackAudio) {
           showTemporaryResponse("Audio is blocked. Click the voice button again to resume playback.");
+          return;
         }
+
+        void Promise.all(remoteAudioElementsRef.current.map((element) => element.play().catch(() => undefined)));
       });
       room.on(RoomEvent.Disconnected, () => {
         liveKitRoomRef.current = null;
@@ -230,7 +262,7 @@ export function SpeechInputWorkbench() {
       room.remoteParticipants.forEach((participant) => {
         participant.trackPublications.forEach((publication) => {
           if (publication.track && publication.kind === Track.Kind.Audio) {
-            handleTrackSubscribed(publication.track);
+            handleTrackSubscribed(publication.track, publication, participant);
           }
         });
       });
@@ -299,7 +331,7 @@ export function SpeechInputWorkbench() {
         }}
       />
       <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-[100px] z-0 flex flex-col items-center">
-        <div className="font-sans text-[6.6rem] font-black uppercase leading-[0.78] tracking-[0.22em] text-white/[0.14] sm:text-[9.2rem] lg:text-[11.2rem]">
+        <div className="font-sans text-[7.8rem] font-black uppercase leading-[0.78] tracking-[0.22em] text-[#262626] sm:text-[10.8rem] lg:text-[13rem]">
           Bron
         </div>
         <div className="mt-5 h-px w-[min(58vw,760px)] bg-gradient-to-r from-transparent via-white/[0.12] to-transparent" />
@@ -308,7 +340,7 @@ export function SpeechInputWorkbench() {
         </p>
       </div>
 
-      <section className="relative z-10 mt-[12rem] flex w-full flex-col items-center">
+      <section className="relative z-10 mt-[20rem] flex w-full flex-col items-center">
         <div className="flex w-full max-w-4xl flex-col items-center">
           <button
             type="button"
