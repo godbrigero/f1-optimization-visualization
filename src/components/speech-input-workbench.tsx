@@ -3,36 +3,24 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Mic, Upload } from "lucide-react";
-import { Room } from "livekit-client";
+import {
+  Room,
+  RoomEvent,
+  Track,
+  type Participant,
+  type RemoteTrack,
+  type TranscriptionSegment,
+} from "livekit-client";
 import { cn } from "@/lib/utils";
 import { api } from "@/trpc/react";
 
 const acceptedFileTypes = ".csv,.json,.txt,.xlsx,.xls,.tsv";
-
-type SpeechRecognitionEvent = Event & {
-  results: SpeechRecognitionResultList;
-  resultIndex: number;
-};
-
-type SpeechRecognitionLike = {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: SpeechRecognitionEvent) => void) | null;
-  onend: (() => void) | null;
-  onerror: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-};
-
-type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+const VOICE_ROOM = "f1-model-conversation";
 
 type ConversationMessage = {
   role: "user" | "assistant";
   content: string;
 };
-
-const VOICE_ROOM = "f1-model-conversation";
 
 function createIdentity() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -42,55 +30,49 @@ function createIdentity() {
   return `speaker-${Date.now()}`;
 }
 
-function getFastSpokenReply(response: string) {
-  const firstSentence = response.match(/^[^.!?]+[.!?]?/)?.[0]?.trim() ?? response.trim();
+function getParticipantRole(participant?: Participant): ConversationMessage["role"] {
+  return participant?.identity.startsWith("speaker-") ? "user" : "assistant";
+}
 
-  if (firstSentence.length <= 42) {
-    return firstSentence;
-  }
-
-  return `${firstSentence.slice(0, 39).trimEnd()}...`;
+function getDisplaySpeaker(role: ConversationMessage["role"]) {
+  return role === "user" ? "You" : "Agent";
 }
 
 export function SpeechInputWorkbench() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const responseTimerRef = useRef<number | null>(null);
   const liveKitRoomRef = useRef<Room | null>(null);
-  const responseAudioRef = useRef<HTMLAudioElement | null>(null);
+  const remoteAudioElementsRef = useRef<HTMLMediaElement[]>([]);
   const [fileName, setFileName] = useState("");
   const [isListening, setIsListening] = useState(false);
   const [isConnectingVoice, setIsConnectingVoice] = useState(false);
-  const [isAgentThinking, setIsAgentThinking] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [spokenInput, setSpokenInput] = useState("");
   const [voiceResponse, setVoiceResponse] = useState("");
-  const [agentResponse, setAgentResponse] = useState("");
   const [conversation, setConversation] = useState<ConversationMessage[]>([]);
   const [debugUnlocked, setDebugUnlocked] = useState(false);
   const hasSpeechInput = spokenInput.trim().split(/\s+/).filter(Boolean).length > 0;
   const hasDataInput = fileName.length > 0;
   const canContinue = ((hasSpeechInput && hasDataInput) || debugUnlocked) && !isSummarizing;
-  const showVoiceResponse =
-    isConnectingVoice || isListening || isAgentThinking || voiceResponse.length > 0 || agentResponse.length > 0;
+  const showVoiceResponse = isConnectingVoice || isListening || voiceResponse.length > 0;
   const tokenMutation = api.livekit.createToken.useMutation();
-  const respondMutation = api.conversation.respond.useMutation();
   const summarizeMutation = api.conversation.summarize.useMutation();
-  const speakMutation = api.conversation.speak.useMutation();
 
   useEffect(() => {
     router.prefetch("/agents");
 
     return () => {
-      recognitionRef.current?.stop();
-      liveKitRoomRef.current?.disconnect();
-      responseAudioRef.current?.pause();
+      const room = liveKitRoomRef.current;
+      liveKitRoomRef.current = null;
+      remoteAudioElementsRef.current.forEach((element) => element.remove());
+      remoteAudioElementsRef.current = [];
+      void room?.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
+      room?.disconnect();
 
       if (responseTimerRef.current) {
         window.clearTimeout(responseTimerRef.current);
       }
-
     };
   }, [router]);
 
@@ -102,7 +84,7 @@ export function SpeechInputWorkbench() {
     }
   }
 
-  function showTemporaryResponse(message: string) {
+  function showTemporaryResponse(message: string, timeout = 4200) {
     setVoiceResponse(message);
 
     if (responseTimerRef.current) {
@@ -111,7 +93,8 @@ export function SpeechInputWorkbench() {
 
     responseTimerRef.current = window.setTimeout(() => {
       setVoiceResponse("");
-    }, 4200);
+      responseTimerRef.current = null;
+    }, timeout);
   }
 
   function clearVoiceResponse() {
@@ -123,9 +106,17 @@ export function SpeechInputWorkbench() {
     }
   }
 
+  function detachRemoteAudio() {
+    remoteAudioElementsRef.current.forEach((element) => element.remove());
+    remoteAudioElementsRef.current = [];
+  }
+
   async function stopLiveKitRoom() {
     const room = liveKitRoomRef.current;
     liveKitRoomRef.current = null;
+    setIsListening(false);
+    clearVoiceResponse();
+    detachRemoteAudio();
 
     if (!room) {
       return;
@@ -135,24 +126,59 @@ export function SpeechInputWorkbench() {
     room.disconnect();
   }
 
-  async function playModelVoice(response: string) {
-    responseAudioRef.current?.pause();
-    responseAudioRef.current = null;
-
-    try {
-      const spokenReply = getFastSpokenReply(response);
-      const { audioBase64, mimeType } = await speakMutation.mutateAsync({
-        input: spokenReply,
-      });
-      const audio = new Audio(`data:${mimeType};base64,${audioBase64}`);
-
-      responseAudioRef.current = audio;
-      await audio.play();
-    } catch (error) {
-      setVoiceResponse(
-        error instanceof Error ? `Voice playback failed: ${error.message}` : "Voice playback failed.",
-      );
+  function handleTrackSubscribed(track: RemoteTrack) {
+    if (track.kind !== Track.Kind.Audio) {
+      return;
     }
+
+    const element = track.attach();
+    element.autoplay = true;
+    element.style.display = "none";
+    document.body.appendChild(element);
+    remoteAudioElementsRef.current = [...remoteAudioElementsRef.current, element];
+  }
+
+  function handleTrackUnsubscribed(track: RemoteTrack) {
+    track.detach().forEach((element) => {
+      element.remove();
+      remoteAudioElementsRef.current = remoteAudioElementsRef.current.filter((audio) => audio !== element);
+    });
+  }
+
+  function handleTranscription(segments: TranscriptionSegment[], participant?: Participant) {
+    const role = getParticipantRole(participant);
+    const readableSegments = segments
+      .map((segment) => segment.text.trim())
+      .filter(Boolean);
+
+    if (readableSegments.length === 0) {
+      return;
+    }
+
+    const text = readableSegments.join(" ").trim();
+    const isFinal = segments.some((segment) => segment.final);
+
+    setVoiceResponse(`${getDisplaySpeaker(role)}: ${text}`);
+
+    if (!isFinal) {
+      return;
+    }
+
+    setConversation((currentConversation) => {
+      const lastMessage = currentConversation.at(-1);
+
+      if (lastMessage?.role === role && lastMessage.content === text) {
+        return currentConversation;
+      }
+
+      return [...currentConversation, { role, content: text }];
+    });
+
+    if (role === "user") {
+      setSpokenInput(text);
+    }
+
+    showTemporaryResponse(`${getDisplaySpeaker(role)}: ${text}`);
   }
 
   async function startLiveKitRoom() {
@@ -167,128 +193,46 @@ export function SpeechInputWorkbench() {
       const { token, url } = await tokenMutation.mutateAsync({
         identity,
         room: VOICE_ROOM,
-        name: "Model conversation",
-        metadata: JSON.stringify({ feature: "digitalocean-model-conversation" }),
+        name: "Driver",
+        metadata: JSON.stringify({ feature: "livekit-model-conversation" }),
         canPublish: true,
         canSubscribe: true,
       });
       const room = new Room();
 
+      room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
+      room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
+      room.on(RoomEvent.TranscriptionReceived, handleTranscription);
+      room.on(RoomEvent.Disconnected, () => {
+        liveKitRoomRef.current = null;
+        setIsListening(false);
+        detachRemoteAudio();
+      });
+
       liveKitRoomRef.current = room;
       await room.connect(url, token);
+      await room.startAudio();
       await room.localParticipant.setMicrophoneEnabled(true);
+      setIsListening(true);
+      showTemporaryResponse("Connected. Start talking.", 2600);
     } finally {
       setIsConnectingVoice(false);
     }
   }
 
-  async function sendTranscriptToModel(transcript: string) {
-    const userMessage: ConversationMessage = {
-      role: "user",
-      content: transcript,
-    };
-    const nextConversation = [...conversation, userMessage];
-
-    setConversation(nextConversation);
-    setIsAgentThinking(true);
-    setAgentResponse("");
-
-    try {
-      const { response } = await respondMutation.mutateAsync({
-        messages: nextConversation,
-      });
-      const assistantMessage: ConversationMessage = {
-        role: "assistant",
-        content: response,
-      };
-
-      setConversation([...nextConversation, assistantMessage]);
-      setAgentResponse(response);
-      void playModelVoice(response);
-    } catch (error) {
-      setAgentResponse(error instanceof Error ? error.message : "The model did not respond.");
-    } finally {
-      setIsAgentThinking(false);
-    }
-  }
-
   async function startSpeechInput() {
-    if (isListening) {
-      recognitionRef.current?.stop();
-      setIsListening(false);
-      clearVoiceResponse();
+    if (isListening || liveKitRoomRef.current) {
       await stopLiveKitRoom();
-      return;
-    }
-
-    const SpeechRecognition =
-      (window as typeof window & {
-        SpeechRecognition?: SpeechRecognitionConstructor;
-        webkitSpeechRecognition?: SpeechRecognitionConstructor;
-      }).SpeechRecognition ??
-      (window as typeof window & {
-        SpeechRecognition?: SpeechRecognitionConstructor;
-        webkitSpeechRecognition?: SpeechRecognitionConstructor;
-      }).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      showTemporaryResponse("Speech input is not supported in this browser.");
       return;
     }
 
     try {
       await startLiveKitRoom();
     } catch (error) {
+      liveKitRoomRef.current = null;
+      setIsListening(false);
       showTemporaryResponse(error instanceof Error ? error.message : "Could not connect LiveKit.");
-      return;
     }
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
-    recognitionRef.current = recognition;
-
-    recognition.onresult = (event) => {
-      let transcript = "";
-      let isFinal = false;
-
-      for (let index = event.resultIndex; index < event.results.length; index += 1) {
-        const result = event.results[index];
-        const phrase = result[0]?.transcript.trim();
-
-        if (phrase) {
-          transcript = `${transcript} ${phrase}`.trim();
-        }
-
-        if (result.isFinal) {
-          isFinal = true;
-        }
-      }
-
-      if (transcript) {
-        setVoiceResponse(transcript);
-
-        if (isFinal) {
-          setSpokenInput(transcript);
-          showTemporaryResponse(transcript);
-          void sendTranscriptToModel(transcript);
-        }
-      }
-    };
-
-    recognition.onerror = () => {
-      setIsListening(false);
-      showTemporaryResponse("I could not hear that. Try again.");
-    };
-
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    setIsListening(true);
-    showTemporaryResponse("Listening through LiveKit...");
-    recognition.start();
   }
 
   async function continueToAgents() {
@@ -296,7 +240,6 @@ export function SpeechInputWorkbench() {
       return;
     }
 
-    recognitionRef.current?.stop();
     await stopLiveKitRoom();
     setIsSummarizing(true);
 
@@ -324,24 +267,34 @@ export function SpeechInputWorkbench() {
 
   return (
     <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#030303] px-5 text-white">
-      <section className="flex w-full max-w-2xl flex-col items-center">
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute left-1/2 top-[24%] flex -translate-x-1/2 flex-col items-center">
+          <div className="font-mono text-[clamp(4.6rem,12vw,13rem)] font-semibold uppercase leading-none tracking-[0.22em] text-white/[0.12]">
+            Bron
+          </div>
+          <div className="mt-5 h-px w-[min(44vw,430px)] bg-gradient-to-r from-transparent via-white/[0.16] to-transparent" />
+        </div>
+      </div>
+
+      <section className="relative z-10 mt-24 flex w-full max-w-2xl flex-col items-center">
         <button
           type="button"
           onClick={startSpeechInput}
           aria-pressed={isListening}
-          aria-label={isListening ? "Stop speech input" : "Start speech input"}
+          aria-label={isListening ? "Stop voice session" : "Start voice session"}
           className={cn(
             "group relative flex h-16 cursor-pointer items-center gap-4 rounded-full border bg-[#080808] px-4 pr-5 text-white shadow-[0_18px_55px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.055)] outline-none transition duration-300 hover:-translate-y-0.5 hover:bg-white/[0.04] focus-visible:ring-3 focus-visible:ring-white/15",
             hasSpeechInput
               ? "border-emerald-400/35 bg-emerald-400/[0.035] shadow-[0_22px_70px_rgba(16,185,129,0.08),inset_0_1px_0_rgba(255,255,255,0.1)] hover:border-emerald-300/45"
-              : "border-red-400/32 bg-red-500/[0.025] hover:border-red-300/42",
+              : "border-white/14 bg-white/[0.025] hover:border-white/24",
           )}
         >
           <span
             className={cn(
               "grid size-10 place-items-center rounded-full border border-white/10 bg-white/[0.035] text-white/78 transition group-hover:border-white/18 group-hover:text-white",
+              isListening && "border-white/28 bg-white/[0.08] text-white shadow-[0_0_28px_rgba(255,255,255,0.1)]",
               hasSpeechInput && "border-emerald-300/24 bg-emerald-300/[0.075] text-white",
-              !hasSpeechInput && "border-red-300/18 bg-red-300/[0.045]",
+              !hasSpeechInput && "border-white/12 bg-white/[0.035]",
             )}
           >
             <Mic className="size-5" strokeWidth={2.05} />
@@ -349,14 +302,16 @@ export function SpeechInputWorkbench() {
 
           <span className="flex min-w-32 flex-col items-start">
             <span className="text-sm font-medium leading-none">
-              {isListening ? "Listening" : hasSpeechInput ? "Voice captured" : "Talk to agent"}
+              {isListening ? "Live conversation" : hasSpeechInput ? "Voice captured" : "Talk to agent"}
             </span>
             <span className="mt-1.5 text-[11px] leading-none text-white/42">
               {isConnectingVoice
                 ? "Connecting LiveKit"
-                : hasSpeechInput
-                  ? "Speech input complete"
-                  : "Say at least one word"}
+                : isListening
+                  ? "Streaming room audio"
+                  : hasSpeechInput
+                    ? "Speech input complete"
+                    : "Say at least one word"}
             </span>
           </span>
 
@@ -368,7 +323,7 @@ export function SpeechInputWorkbench() {
                   "w-1 rounded-full bg-white/35 motion-safe:animate-pulse",
                   isListening && "bg-white/75",
                   hasSpeechInput && !isListening && "bg-emerald-200/65",
-                  !hasSpeechInput && !isListening && "bg-red-200/45",
+                  !hasSpeechInput && !isListening && "bg-white/35",
                 )}
                 style={{
                   height,
@@ -388,15 +343,8 @@ export function SpeechInputWorkbench() {
               : "mt-0 grid-rows-[0fr] opacity-0",
           )}
         >
-          <p
-            aria-live="polite"
-            className="min-h-0 max-w-md overflow-hidden text-center text-sm text-white/38"
-          >
-            {isAgentThinking
-              ? "Model is thinking..."
-              : agentResponse
-                ? `Model: ${agentResponse}`
-                : voiceResponse || "Listening..."}
+          <p aria-live="polite" className="min-h-0 max-w-md overflow-hidden text-center text-sm text-white/38">
+            {voiceResponse || "Listening..."}
           </p>
         </div>
 
@@ -406,19 +354,17 @@ export function SpeechInputWorkbench() {
             showVoiceResponse ? "mt-8" : "mt-9",
             hasDataInput
               ? "border-emerald-400/35 bg-emerald-400/[0.025] hover:border-emerald-300/45"
-              : "border-red-400/32 bg-red-500/[0.02] hover:border-red-300/42",
+              : "border-white/14 bg-white/[0.025] hover:border-white/24",
           )}
         >
           <Upload
             className={cn(
               "size-5 shrink-0 text-white/58",
-              hasDataInput ? "text-emerald-200/72" : "text-red-200/58",
+              hasDataInput ? "text-emerald-200/72" : "text-white/52",
             )}
             strokeWidth={1.8}
           />
-          <span className="min-w-0 flex-1 truncate text-base text-white/58">
-            {fileName || "Upload data"}
-          </span>
+          <span className="min-w-0 flex-1 truncate text-base text-white/58">{fileName || "Upload data"}</span>
           <span className="shrink-0 text-base font-medium text-white/90">Browse</span>
           <input
             ref={fileInputRef}
@@ -448,9 +394,7 @@ export function SpeechInputWorkbench() {
       <div
         className={cn(
           "fixed bottom-8 left-0 right-0 flex justify-center px-5 transition-all duration-300",
-          canContinue
-            ? "translate-y-0 opacity-100"
-            : "pointer-events-none translate-y-5 opacity-0",
+          canContinue ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-5 opacity-0",
         )}
       >
         <button

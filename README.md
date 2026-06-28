@@ -20,13 +20,24 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+Run the LiveKit voice worker in a second terminal when using `/speech`:
+
+```bash
+npm run agent:dev
+```
+
+The browser publishes microphone audio to a LiveKit room. The worker joins that
+room, streams STT through LiveKit Inference, sends the turn to the DigitalOcean
+OpenAI-compatible chat model, streams the response into Cartesia TTS through
+LiveKit Inference, and publishes the returned audio back into the room.
+
 ## tRPC API
 
 The app exposes a single tRPC endpoint at `/trpc`.
 
 - `livekit.createToken` creates a LiveKit room token.
-- `conversation.respond` sends the captured user utterance to the cheaper
-  DigitalOcean model.
+- `conversation.respond` sends a captured user utterance to the cheaper
+  DigitalOcean model for non-LiveKit fallback flows.
 - `conversation.summarize` sends the conversation to the summary model and
   returns the final implementation brief string.
 
@@ -50,6 +61,9 @@ curl -X POST "http://localhost:3000/trpc/livekit.createToken" \
 - `NEXT_PUBLIC_LIVEKIT_URL`
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
+- `LIVEKIT_AGENT_STT_MODEL`
+- `LIVEKIT_AGENT_TTS_MODEL`
+- `LIVEKIT_AGENT_TTS_VOICE`
 - `DIGITALOCEAN_MODEL_API_KEY`
 - `DIGITALOCEAN_MODEL_BASE_URL`
 - `DIGITALOCEAN_CHAT_MODEL`

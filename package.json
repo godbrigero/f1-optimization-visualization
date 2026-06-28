@@ -4,12 +4,17 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "agent:dev": "node agents/voice-agent.mjs dev",
+    "agent:start": "node agents/voice-agent.mjs start",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
+    "@livekit/agents": "^1.4.9",
+    "@livekit/agents-plugin-openai": "^1.4.9",
+    "@livekit/rtc-node": "^0.13.29",
     "@tanstack/react-query": "^5.101.2",
     "@trpc/client": "^11.18.0",
     "@trpc/react-query": "^11.18.0",
@@ -42,5 +47,8 @@
   },
   "overrides": {
     "postcss": "8.5.15"
+  },
+  "optionalDependencies": {
+    "@livekit/rtc-ffi-bindings-darwin-arm64": "^0.12.60"
   }
 }
