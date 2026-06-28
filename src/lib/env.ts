@@ -33,7 +33,7 @@ export function getDigitalOceanModelEnv() {
     summaryModel: requireEnv("DIGITALOCEAN_SUMMARY_MODEL"),
     ttsInstructions:
       optionalEnv("DIGITALOCEAN_TTS_INSTRUCTIONS") ??
-      "A polished, warm, natural voice with calm confidence, clear pacing, and subtle energy. Avoid sounding robotic or overly dramatic.",
+      "Warm, natural, concise.",
     ttsModel: optionalEnv("DIGITALOCEAN_TTS_MODEL") ?? "qwen3-tts-voicedesign",
     ttsVoice: optionalEnv("DIGITALOCEAN_TTS_VOICE") ?? "alloy",
   };

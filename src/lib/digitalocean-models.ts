@@ -27,12 +27,14 @@ type DigitalOceanSpeechResponse = {
   }>;
 };
 
+const speechCache = new Map<string, string>();
+
 const chatModelFallbacks = [
+  "qwen3-coder-flash",
+  "mistral-3-14B",
   "openai-gpt-5.4-nano",
   "openai-gpt-4o-mini",
-  "qwen3-coder-flash",
   "openai-gpt-oss-20b",
-  "mistral-3-14B",
 ];
 
 const summaryModelFallbacks = [
@@ -84,11 +86,13 @@ async function resolveAvailableModel(model: string, fallbacks: string[]) {
 
 async function completeWithDigitalOcean({
   fallbacks,
+  maxTokens,
   messages,
   model,
   temperature = 0.3,
 }: {
   fallbacks: string[];
+  maxTokens?: number;
   messages: ConversationMessage[];
   model: string;
   temperature?: number;
@@ -105,6 +109,7 @@ async function completeWithDigitalOcean({
       model: resolvedModel,
       messages,
       temperature,
+      ...(maxTokens ? { max_tokens: maxTokens } : {}),
     }),
   });
 
@@ -132,13 +137,14 @@ export async function continueConversation(messages: ConversationMessage[]) {
 
   return completeWithDigitalOcean({
     fallbacks: chatModelFallbacks,
+    maxTokens: 36,
     model: chatModel,
     temperature: 0.45,
     messages: [
       {
         role: "system",
         content:
-          "You are a concise voice agent. Ask short clarifying questions when needed. Keep responses conversational and under 60 words.",
+          "You are a fast voice agent. Reply in one short sentence, 12 words max. Ask one concise clarifying question when needed.",
       },
       ...messages,
     ],
@@ -150,6 +156,7 @@ export async function summarizeConversation(messages: ConversationMessage[]) {
 
   return completeWithDigitalOcean({
     fallbacks: summaryModelFallbacks,
+    maxTokens: 220,
     model: summaryModel,
     temperature: 0.1,
     messages: [
@@ -170,6 +177,13 @@ export async function summarizeConversation(messages: ConversationMessage[]) {
 
 export async function synthesizeSpeech(input: string) {
   const { apiKey, baseUrl, ttsInstructions, ttsModel, ttsVoice } = getDigitalOceanModelEnv();
+  const cacheKey = `${ttsModel}:${ttsVoice}:${ttsInstructions}:${input}`;
+  const cachedAudio = speechCache.get(cacheKey);
+
+  if (cachedAudio) {
+    return cachedAudio;
+  }
+
   const response = await fetch(`${normalizeBaseUrl(baseUrl)}/audio/speech`, {
     method: "POST",
     headers: {
@@ -194,10 +208,13 @@ export async function synthesizeSpeech(input: string) {
 
   const contentType = response.headers.get("content-type") ?? "";
 
-  if (contentType.includes("audio/")) {
+  if (contentType.includes("audio/") || contentType.includes("application/octet-stream")) {
     const audioBuffer = await response.arrayBuffer();
 
-    return Buffer.from(audioBuffer).toString("base64");
+    const audioBase64 = Buffer.from(audioBuffer).toString("base64");
+
+    speechCache.set(cacheKey, audioBase64);
+    return audioBase64;
   }
 
   const data = (await response.json()) as DigitalOceanSpeechResponse;
@@ -207,5 +224,6 @@ export async function synthesizeSpeech(input: string) {
     throw new Error("DigitalOcean TTS response did not include audio.");
   }
 
+  speechCache.set(cacheKey, audioBase64);
   return audioBase64;
 }

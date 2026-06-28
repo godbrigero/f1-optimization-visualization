@@ -441,11 +441,11 @@ export function AgentGraph() {
     setIsRunProgressVisible(false);
     runProgressCloseTimeout.current = setTimeout(() => {
       setIsRunProgressMounted(false);
-    }, 180);
+    }, 90);
   }
 
   const hasMovedView = !isDefaultViewBox(viewBox);
-  const isRunProgressActive = isRunProgressMounted;
+  const isRunProgressActive = isRunProgressVisible;
 
   return (
     <main
@@ -570,10 +570,10 @@ export function AgentGraph() {
       {isRunProgressMounted ? (
         <div
           aria-label="Run Progress"
-          className={`absolute right-5 top-5 z-30 w-[320px] origin-top-right rounded-lg border border-white/14 bg-black/95 shadow-2xl shadow-black/40 transition-[transform,opacity] duration-180 ease-out ${
+          className={`absolute right-5 top-5 z-30 w-[320px] origin-top-right transform-gpu rounded-lg border border-white/14 bg-black/95 shadow-2xl shadow-black/40 will-change-transform transition-[transform,opacity] duration-100 ease-out ${
             isRunProgressVisible
               ? "translate-y-0 scale-100 opacity-100"
-              : "-translate-y-2 scale-[0.98] opacity-0"
+              : "-translate-y-1 scale-[0.99] opacity-0"
           }`}
         >
           <div className="flex h-12 items-center justify-between border-b border-white/10 px-4">

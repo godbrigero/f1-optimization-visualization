@@ -42,6 +42,16 @@ function createIdentity() {
   return `speaker-${Date.now()}`;
 }
 
+function getFastSpokenReply(response: string) {
+  const firstSentence = response.match(/^[^.!?]+[.!?]?/)?.[0]?.trim() ?? response.trim();
+
+  if (firstSentence.length <= 42) {
+    return firstSentence;
+  }
+
+  return `${firstSentence.slice(0, 39).trimEnd()}...`;
+}
+
 export function SpeechInputWorkbench() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -130,18 +140,18 @@ export function SpeechInputWorkbench() {
     responseAudioRef.current = null;
 
     try {
+      const spokenReply = getFastSpokenReply(response);
       const { audioBase64, mimeType } = await speakMutation.mutateAsync({
-        input: response,
+        input: spokenReply,
       });
       const audio = new Audio(`data:${mimeType};base64,${audioBase64}`);
 
       responseAudioRef.current = audio;
       await audio.play();
-    } catch {
-      if ("speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-        window.speechSynthesis.speak(new SpeechSynthesisUtterance(response));
-      }
+    } catch (error) {
+      setVoiceResponse(
+        error instanceof Error ? `Voice playback failed: ${error.message}` : "Voice playback failed.",
+      );
     }
   }
 
@@ -194,7 +204,7 @@ export function SpeechInputWorkbench() {
 
       setConversation([...nextConversation, assistantMessage]);
       setAgentResponse(response);
-      await playModelVoice(response);
+      void playModelVoice(response);
     } catch (error) {
       setAgentResponse(error instanceof Error ? error.message : "The model did not respond.");
     } finally {
