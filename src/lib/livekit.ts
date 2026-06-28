@@ -1,7 +1,8 @@
 import "server-only";
 
+import { RoomAgentDispatch, RoomConfiguration } from "@livekit/protocol";
 import { AccessToken } from "livekit-server-sdk";
-import { getLiveKitEnv } from "@/lib/env";
+import { getLiveKitAgentName, getLiveKitEnv } from "@/lib/env";
 
 export type CreateLiveKitTokenInput = {
   identity: string;
@@ -10,6 +11,7 @@ export type CreateLiveKitTokenInput = {
   metadata?: string;
   canPublish?: boolean;
   canSubscribe?: boolean;
+  dispatchAgent?: boolean;
 };
 
 export async function createLiveKitRoomToken({
@@ -19,6 +21,7 @@ export async function createLiveKitRoomToken({
   metadata,
   canPublish = true,
   canSubscribe = true,
+  dispatchAgent = false,
 }: CreateLiveKitTokenInput) {
   const { apiKey, apiSecret, url } = getLiveKitEnv();
   const token = new AccessToken(apiKey, apiSecret, {
@@ -34,6 +37,17 @@ export async function createLiveKitRoomToken({
     canPublish,
     canSubscribe,
   });
+
+  if (dispatchAgent) {
+    token.roomConfig = new RoomConfiguration({
+      agents: [
+        new RoomAgentDispatch({
+          agentName: getLiveKitAgentName(),
+          metadata: JSON.stringify({ participantIdentity: identity }),
+        }),
+      ],
+    });
+  }
 
   return {
     token: await token.toJwt(),

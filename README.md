@@ -1,4 +1,4 @@
-# F1 Optimization Visualization
+# Lebronsseiur
 
 Vercel-ready T3-style Next.js app scaffolded with TypeScript, Tailwind, tRPC,
 TanStack Query, and LiveKit.
@@ -20,16 +20,24 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-Run the LiveKit voice worker in a second terminal when using `/speech`:
-
-```bash
-npm run agent:dev
-```
-
-The browser publishes microphone audio to a LiveKit room. The worker joins that
+The dev command also starts the LiveKit voice worker used by `/speech`. The
+browser publishes microphone audio to a LiveKit room. The worker joins that
 room, streams STT through LiveKit Inference, sends the turn to the DigitalOcean
 OpenAI-compatible chat model, streams the response into Cartesia TTS through
 LiveKit Inference, and publishes the returned audio back into the room.
+
+## LiveKit Synthetic Mic Test
+
+With `npm run dev` already running, run:
+
+```bash
+npm run test:livekit:synthetic
+```
+
+The test opens `/speech` in Chrome, replaces `getUserMedia` with a generated
+audio stream, clicks the voice square, screenshots the page every few seconds,
+and fails if browser mic energy or outbound WebRTC audio packets stay flat.
+Reports are written to `.codex/media/livekit-synthetic/`.
 
 ## tRPC API
 

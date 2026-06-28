@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2, Mic, MicOff } from "lucide-react";
-import { Room, RoomEvent, type TranscriptionSegment } from "livekit-client";
+import { Room, RoomEvent } from "livekit-client";
 import { useCallback, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
@@ -10,6 +10,15 @@ import { api } from "@/trpc/react";
 type VoiceState = "idle" | "connecting" | "listening" | "stopping" | "error";
 
 const TRANSCRIPTION_ROOM = "f1-voice-transcription";
+const TRANSCRIPTION_TOPIC = "lk.transcription";
+const TRANSCRIPTION_FINAL_ATTRIBUTE = "lk.transcription_final";
+
+type TranscriptSegment = {
+  id: string;
+  text: string;
+  final: boolean;
+  timestamp: number;
+};
 
 function createIdentity() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -21,24 +30,54 @@ function createIdentity() {
 
 export function VoiceTranscriptionButton() {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
-  const [segments, setSegments] = useState<TranscriptionSegment[]>([]);
+  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const roomRef = useRef<Room | null>(null);
   const tokenMutation = api.livekit.createToken.useMutation();
 
-  const handleTranscription = useCallback((receivedSegments: TranscriptionSegment[]) => {
+  const handleTranscript = useCallback((segment: TranscriptSegment) => {
     setSegments((currentSegments) => {
-      const merged = new Map(currentSegments.map((segment) => [segment.id, segment]));
-
-      for (const segment of receivedSegments) {
-        merged.set(segment.id, segment);
-      }
+      const merged = new Map(currentSegments.map((currentSegment) => [currentSegment.id, currentSegment]));
+      merged.set(segment.id, segment);
 
       return Array.from(merged.values())
-        .sort((a, b) => a.startTime - b.startTime)
+        .sort((a, b) => a.timestamp - b.timestamp)
         .slice(-24);
     });
   }, []);
+
+  const handleTranscriptionStream = useCallback(
+    async (reader: AsyncIterable<string> & { info: { id: string; timestamp: number; attributes?: Record<string, string> } }) => {
+      const isFinal = reader.info.attributes?.[TRANSCRIPTION_FINAL_ATTRIBUTE] === "true";
+      let latestText = "";
+
+      for await (const chunk of reader) {
+        const text = chunk.trim();
+
+        if (text.length === 0) {
+          continue;
+        }
+
+        latestText = text;
+        handleTranscript({
+          id: reader.info.id,
+          text: latestText,
+          final: isFinal,
+          timestamp: reader.info.timestamp,
+        });
+      }
+
+      if (isFinal && latestText.length > 0) {
+        handleTranscript({
+          id: reader.info.id,
+          text: latestText,
+          final: true,
+          timestamp: reader.info.timestamp,
+        });
+      }
+    },
+    [handleTranscript],
+  );
 
   const disconnectRoom = useCallback(async () => {
     const room = roomRef.current;
@@ -48,10 +87,10 @@ export function VoiceTranscriptionButton() {
       return;
     }
 
-    room.off(RoomEvent.TranscriptionReceived, handleTranscription);
+    room.unregisterTextStreamHandler(TRANSCRIPTION_TOPIC);
     await room.localParticipant.setMicrophoneEnabled(false).catch(() => undefined);
     room.disconnect();
-  }, [handleTranscription]);
+  }, []);
 
   const stopListening = useCallback(async () => {
     setVoiceState("stopping");
@@ -66,9 +105,14 @@ export function VoiceTranscriptionButton() {
 
     const room = new Room();
     roomRef.current = room;
-    room.on(RoomEvent.TranscriptionReceived, handleTranscription);
+    room.registerTextStreamHandler(TRANSCRIPTION_TOPIC, (reader) => {
+      void handleTranscriptionStream(reader).catch(() => {
+        setVoiceState("error");
+        setErrorMessage("Could not read the LiveKit transcript stream.");
+      });
+    });
     room.on(RoomEvent.Disconnected, () => {
-      room.off(RoomEvent.TranscriptionReceived, handleTranscription);
+      room.unregisterTextStreamHandler(TRANSCRIPTION_TOPIC);
       if (roomRef.current === room) {
         roomRef.current = null;
         setVoiceState("idle");
@@ -94,7 +138,7 @@ export function VoiceTranscriptionButton() {
       setVoiceState("error");
       setErrorMessage(error instanceof Error ? error.message : "Could not start voice-to-text.");
     }
-  }, [disconnectRoom, handleTranscription, tokenMutation]);
+  }, [disconnectRoom, handleTranscriptionStream, tokenMutation]);
 
   const isBusy = voiceState === "connecting" || voiceState === "stopping";
   const isListening = voiceState === "listening";

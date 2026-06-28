@@ -4,7 +4,7 @@ import { ViewTransition } from "react";
 import { AgentGraph } from "@/components/agent-graph";
 
 export const metadata: Metadata = {
-  title: "Agent Network | F1 Optimization Visualization",
+  title: "Agent Network | Lebronsseiur",
   description: "A modern monochrome pipeline graph of interconnected agents.",
 };
 

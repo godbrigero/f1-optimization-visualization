@@ -12,6 +12,7 @@ export const livekitRouter = createTRPCRouter({
         metadata: z.string().max(4096).optional(),
         canPublish: z.boolean().optional(),
         canSubscribe: z.boolean().optional(),
+        dispatchAgent: z.boolean().optional(),
       }),
     )
     .mutation(({ input }) => createLiveKitRoomToken(input)),

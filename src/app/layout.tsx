@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "F1 Optimization Visualization",
-  description: "Next.js starter for F1 optimization workflows.",
+  title: "Lebronsseiur",
+  description: "F1 optimization workflows for Lebronsseiur.",
 };
 
 export default function RootLayout({

@@ -25,6 +25,10 @@ export function getLiveKitEnv() {
   };
 }
 
+export function getLiveKitAgentName() {
+  return optionalEnv("LIVEKIT_AGENT_NAME") ?? optionalEnv("LIVEKIT_AGENT_ID") ?? "f1-voice-agent";
+}
+
 export function getDigitalOceanModelEnv() {
   return {
     apiKey: requireEnv("DIGITALOCEAN_MODEL_API_KEY"),

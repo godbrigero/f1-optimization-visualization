@@ -1,0 +1,190 @@
+{
+  "ok": true,
+  "url": "http://localhost:3000/speech",
+  "outputDir": "/Users/godbrigero/Documents/f1-optimization-visualization/.codex/media/livekit-synthetic/2026-06-28T05-47-13-878Z",
+  "screenshots": [
+    "/Users/godbrigero/Documents/f1-optimization-visualization/.codex/media/livekit-synthetic/2026-06-28T05-47-13-878Z/screenshots/00-before-click.png",
+    "/Users/godbrigero/Documents/f1-optimization-visualization/.codex/media/livekit-synthetic/2026-06-28T05-47-13-878Z/screenshots/01-4003ms.png",
+    "/Users/godbrigero/Documents/f1-optimization-visualization/.codex/media/livekit-synthetic/2026-06-28T05-47-13-878Z/screenshots/02-8048ms.png",
+    "/Users/godbrigero/Documents/f1-optimization-visualization/.codex/media/livekit-synthetic/2026-06-28T05-47-13-878Z/screenshots/03-12093ms.png",
+    "/Users/godbrigero/Documents/f1-optimization-visualization/.codex/media/livekit-synthetic/2026-06-28T05-47-13-878Z/screenshots/04-16133ms.png"
+  ],
+  "summary": {
+    "maxRms": 0.14150631249600676,
+    "bytesSentDelta": 149435,
+    "packetsSentDelta": 605,
+    "agentJoined": true,
+    "finalStatusText": "Lebronsseiur\nDashboard\nATTACH DATA WHEN LEBRONSSEIUR NEEDS CONTEXT.\n\nLISTENING...\n\nContinue"
+  },
+  "failures": [],
+  "samples": [
+    {
+      "at": 1782625639739,
+      "bodyText": "Lebronsseiur\nDashboard\nATTACH DATA WHEN LEBRONSSEIUR NEEDS CONTEXT.\n\nVOICE AGENT CONNECTED. SPEAK NOW.\n\nContinue",
+      "createdStreams": 1,
+      "getUserMediaCalls": [
+        {
+          "audio": true,
+          "video": false,
+          "at": 1782625637440
+        }
+      ],
+      "rms": 0.1413447214276926,
+      "peerConnections": 1,
+      "senderTracks": [
+        {
+          "kind": "audio",
+          "enabled": true,
+          "muted": false,
+          "readyState": "live",
+          "label": "MediaStreamAudioDestinationNode"
+        }
+      ],
+      "peerConnectionStats": [
+        [
+          {
+            "id": "OT01A4177618343",
+            "type": "outbound-rtp",
+            "kind": "audio",
+            "mediaType": "audio",
+            "packetsSent": 50,
+            "bytesSent": 12465
+          },
+          {
+            "id": "SA1",
+            "type": "media-source",
+            "kind": "audio",
+            "totalAudioEnergy": 0.039595166015629464,
+            "audioLevel": 0.1999877925962096
+          }
+        ]
+      ]
+    },
+    {
+      "at": 1782625643782,
+      "bodyText": "Lebronsseiur\nDashboard\nATTACH DATA WHEN LEBRONSSEIUR NEEDS CONTEXT.\n\nLISTENING...\n\nContinue",
+      "createdStreams": 1,
+      "getUserMediaCalls": [
+        {
+          "audio": true,
+          "video": false,
+          "at": 1782625637440
+        }
+      ],
+      "rms": 0.14150631249600676,
+      "peerConnections": 1,
+      "senderTracks": [
+        {
+          "kind": "audio",
+          "enabled": true,
+          "muted": false,
+          "readyState": "live",
+          "label": "MediaStreamAudioDestinationNode"
+        }
+      ],
+      "peerConnectionStats": [
+        [
+          {
+            "id": "OT01A4177618343",
+            "type": "outbound-rtp",
+            "kind": "audio",
+            "mediaType": "audio",
+            "packetsSent": 252,
+            "bytesSent": 62359
+          },
+          {
+            "id": "SA1",
+            "type": "media-source",
+            "kind": "audio",
+            "totalAudioEnergy": 0.20117543945314986,
+            "audioLevel": 0.1999877925962096
+          }
+        ]
+      ]
+    },
+    {
+      "at": 1782625647827,
+      "bodyText": "Lebronsseiur\nDashboard\nATTACH DATA WHEN LEBRONSSEIUR NEEDS CONTEXT.\n\nLISTENING...\n\nContinue",
+      "createdStreams": 1,
+      "getUserMediaCalls": [
+        {
+          "audio": true,
+          "video": false,
+          "at": 1782625637440
+        }
+      ],
+      "rms": 0.1413347698109953,
+      "peerConnections": 1,
+      "senderTracks": [
+        {
+          "kind": "audio",
+          "enabled": true,
+          "muted": false,
+          "readyState": "live",
+          "label": "MediaStreamAudioDestinationNode"
+        }
+      ],
+      "peerConnectionStats": [
+        [
+          {
+            "id": "OT01A4177618343",
+            "type": "outbound-rtp",
+            "kind": "audio",
+            "mediaType": "audio",
+            "packetsSent": 455,
+            "bytesSent": 112500
+          },
+          {
+            "id": "SA1",
+            "type": "media-source",
+            "kind": "audio",
+            "totalAudioEnergy": 0.36315566406253785,
+            "audioLevel": 0.1999877925962096
+          }
+        ]
+      ]
+    },
+    {
+      "at": 1782625651866,
+      "bodyText": "Lebronsseiur\nDashboard\nATTACH DATA WHEN LEBRONSSEIUR NEEDS CONTEXT.\n\nLISTENING...\n\nContinue",
+      "createdStreams": 1,
+      "getUserMediaCalls": [
+        {
+          "audio": true,
+          "video": false,
+          "at": 1782625637440
+        }
+      ],
+      "rms": 0.14133901758411577,
+      "peerConnections": 1,
+      "senderTracks": [
+        {
+          "kind": "audio",
+          "enabled": true,
+          "muted": false,
+          "readyState": "live",
+          "label": "MediaStreamAudioDestinationNode"
+        }
+      ],
+      "peerConnectionStats": [
+        [
+          {
+            "id": "OT01A4177618343",
+            "type": "outbound-rtp",
+            "kind": "audio",
+            "mediaType": "audio",
+            "packetsSent": 655,
+            "bytesSent": 161900
+          },
+          {
+            "id": "SA1",
+            "type": "media-source",
+            "kind": "audio",
+            "totalAudioEnergy": 0.5231361328125506,
+            "audioLevel": 0.1999877925962096
+          }
+        ]
+      ]
+    }
+  ]
+}

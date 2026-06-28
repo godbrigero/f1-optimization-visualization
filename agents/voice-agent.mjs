@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { cli, defineAgent, inference, ServerOptions, voice } from "@livekit/agents";
+import { AutoSubscribe, cli, defineAgent, inference, llm, ServerOptions, voice } from "@livekit/agents";
 import { LLM as OpenAILLM } from "@livekit/agents-plugin-openai";
+import { z } from "zod";
 
 const currentFile = fileURLToPath(import.meta.url);
 const workspaceRoot = path.resolve(path.dirname(currentFile), "..");
@@ -63,6 +64,10 @@ function optionalNumberEnv(name, fallback) {
   return Number.isFinite(parsedValue) ? parsedValue : fallback;
 }
 
+function boundedNumberEnv(name, fallback, min, max) {
+  return Math.min(max, Math.max(min, optionalNumberEnv(name, fallback)));
+}
+
 const livekitUrl = requiredEnv("LIVEKIT_URL");
 const livekitApiKey = requiredEnv("LIVEKIT_API_KEY");
 const livekitApiSecret = requiredEnv("LIVEKIT_API_SECRET");
@@ -71,13 +76,14 @@ const digitalOceanBaseUrl = process.env.DIGITALOCEAN_MODEL_BASE_URL ?? "https://
 const chatModel = process.env.DIGITALOCEAN_CHAT_MODEL ?? "qwen3-coder-flash";
 const sttModel = process.env.LIVEKIT_AGENT_STT_MODEL ?? "deepgram/flux-general-en";
 const ttsModel = process.env.LIVEKIT_AGENT_TTS_MODEL ?? "cartesia/sonic-3.5";
-const ttsVoice = process.env.LIVEKIT_AGENT_TTS_VOICE || "e2d48e7b-cc6d-4f97-a8fd-13c1449aeebd";
-const agentId = process.env.LIVEKIT_AGENT_ID || "f1-voice-agent";
+const ttsVoice = process.env.LIVEKIT_AGENT_TTS_VOICE || "a5136bf9-224c-4d76-b823-52bd5efcffcc";
+const agentName = process.env.LIVEKIT_AGENT_NAME || process.env.LIVEKIT_AGENT_ID || "f1-voice-agent";
+const agentId = process.env.LIVEKIT_AGENT_ID || agentName;
+const CUSTOM_DATASET_UPLOAD_TOPIC = "lebronsseiur.custom_dataset_upload";
+const START_AGENT_WORK_TOPIC = "lebronsseiur.start_agent_work";
 
 export default defineAgent({
   entry: async (ctx) => {
-    await ctx.connect();
-
     const session = new voice.AgentSession({
       stt: new inference.STT({
         model: sttModel,
@@ -85,8 +91,8 @@ export default defineAgent({
         apiKey: livekitApiKey,
         apiSecret: livekitApiSecret,
         modelOptions: {
-          eager_eot_threshold: 0.55,
-          eot_timeout_ms: 900,
+          eager_eot_threshold: 0.42,
+          eot_timeout_ms: boundedNumberEnv("LIVEKIT_AGENT_EOT_TIMEOUT_MS", 500, 500, 60000),
           language_hint: "en",
         },
       }),
@@ -119,8 +125,8 @@ export default defineAgent({
           enabled: false,
         },
         endpointing: {
-          minDelay: 300,
-          maxDelay: 1200,
+          minDelay: 120,
+          maxDelay: 550,
         },
       },
       ttsTextTransforms: ["filter_markdown", "filter_emoji"],
@@ -129,13 +135,50 @@ export default defineAgent({
     const agent = new voice.Agent({
       id: agentId,
       instructions:
-        "You are Bron, a fast voice agent for a problem-solving app. Speak in short, confident sentences under 18 words unless asked for detail. Ask one clear follow-up when the user is vague. Do not mention implementation details unless asked.",
+        "You are Bron, a fast voice agent for a problem-solving app. Speak in short, confident sentences under 18 words unless asked for detail. Ask one clear follow-up when the user is vague. Do not mention implementation details unless asked. If the user mentions having, needing, uploading, attaching, importing, or using a custom dataset or their own data file, decide that they need the custom dataset upload control. Call show_custom_dataset_upload, then say exactly: \"Oh, I'll pull up the addition button below. Just press it and add your custom dataset in any format.\" Keep the voice conversation going after saying that. When the user clearly says they are done explaining, asks you to get to work, start, run it, build it, solve it, or proceed, call start_agent_work. Do not call start_agent_work while you still need a critical clarification.",
+      tools: {
+        show_custom_dataset_upload: llm.tool({
+          description:
+            "Show the custom dataset upload button when the user mentions a custom dataset, their own data, source data, spreadsheet, CSV, JSON, Excel file, or attaching/uploading data.",
+          parameters: z.object({
+            reason: z.string().optional(),
+          }),
+          execute: async () => {
+            await ctx.room.localParticipant?.sendText(
+              JSON.stringify({ type: "show_custom_dataset_upload" }),
+              { topic: CUSTOM_DATASET_UPLOAD_TOPIC },
+            );
+
+            return "The custom dataset upload button is visible below the voice control.";
+          },
+        }),
+        start_agent_work: llm.tool({
+          description:
+            "Use when the user is done explaining and wants the app to stop the voice conversation, summarize the request, and move to the agent work graph.",
+          parameters: z.object({
+            reason: z.string().optional(),
+          }),
+          execute: async () => {
+            await ctx.room.localParticipant?.sendText(
+              JSON.stringify({ type: "start_agent_work" }),
+              { topic: START_AGENT_WORK_TOPIC },
+            );
+
+            return "Starting the agent work now.";
+          },
+        }),
+      },
     });
 
     await session.start({
       agent,
       room: ctx.room,
+      outputOptions: {
+        syncTranscription: false,
+      },
     });
+
+    await ctx.connect(undefined, AutoSubscribe.AUDIO_ONLY);
 
     // Do not speak on join. The first audio should be a direct response to the user.
   },
@@ -150,7 +193,7 @@ if (process.argv[1] === currentFile) {
       wsURL: livekitUrl,
       apiKey: livekitApiKey,
       apiSecret: livekitApiSecret,
-      agentName: "",
+      agentName,
     }),
   );
 }

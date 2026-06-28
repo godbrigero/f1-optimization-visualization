@@ -1,14 +1,15 @@
 {
-  "name": "f1-optimization-visualization",
+  "name": "lebronsseiur",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/with-livekit-agent.mjs dev",
     "agent:dev": "node agents/voice-agent.mjs dev",
     "agent:start": "node agents/voice-agent.mjs start",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "node scripts/with-livekit-agent.mjs start",
+    "lint": "eslint",
+    "test:livekit:synthetic": "node scripts/livekit-synthetic-mic-test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
@@ -42,6 +43,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
+    "playwright": "^1.61.1",
     "tailwindcss": "^4",
     "typescript": "^5"
   },

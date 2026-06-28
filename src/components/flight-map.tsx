@@ -241,7 +241,7 @@ export function FlightMap() {
         className={`absolute left-1/2 top-4 z-10 w-[min(92vw,32rem)] -translate-x-1/2 rounded-xl border border-white/15 bg-black/70 px-5 py-3 text-center shadow-lg shadow-black/40 backdrop-blur-sm transition-opacity duration-200 ${isPausedAtStop ? "opacity-100" : "opacity-95"}`}
       >
         <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-white/50">
-          Round {displayStopIndex + 1} · {displayedCircuit.city}
+          Lebronsseiur · Round {displayStopIndex + 1} · {displayedCircuit.city}
         </p>
         <p className="mt-1 text-base font-semibold text-white sm:text-lg">{displayedCircuit.grandPrix}</p>
         <p className="mt-0.5 text-sm text-red-300">{formatRaceDate(displayedCircuit.raceDate)}</p>
