@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ViewTransition } from "react";
 import { SpeechInputWorkbench } from "@/components/speech-input-workbench";
 
 export const metadata: Metadata = {
@@ -7,5 +8,13 @@ export const metadata: Metadata = {
 };
 
 export default function SpeechPage() {
-  return <SpeechInputWorkbench />;
+  return (
+    <ViewTransition
+      enter={{ "nav-forward": "nav-forward", default: "none" }}
+      exit={{ "nav-forward": "nav-forward", default: "none" }}
+      default="none"
+    >
+      <SpeechInputWorkbench />
+    </ViewTransition>
+  );
 }

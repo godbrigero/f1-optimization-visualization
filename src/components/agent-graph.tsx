@@ -1,7 +1,7 @@
 "use client";
 
-import { GitBranch, PanelLeft, Plus, X } from "lucide-react";
-import { useState } from "react";
+import { Activity, GitBranch, PanelLeft, RotateCcw, X } from "lucide-react";
+import { type PointerEvent, type WheelEvent, useEffect, useRef, useState } from "react";
 
 type AgentNode = {
   id: string;
@@ -27,6 +27,23 @@ type Iteration = {
   mermaid: string;
 };
 
+type AddIterationDetail = {
+  description?: string;
+  mermaid?: string;
+  name?: string;
+};
+
+type IterationWindow = Window & {
+  addAgentGraphIteration?: (detail?: AddIterationDetail) => void;
+};
+
+type GraphViewBox = {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+};
+
 const nodes: AgentNode[] = [
   {
     id: "input",
@@ -34,9 +51,9 @@ const nodes: AgentNode[] = [
     description: "request + source data",
     terminal: true,
     x: 600,
-    y: 70,
-    width: 250,
-    height: 76,
+    y: 78,
+    width: 330,
+    height: 104,
   },
   {
     id: "ingest",
@@ -110,13 +127,10 @@ const edges: AgentEdge[] = [
   { from: "router", to: "planner", primary: true },
   { from: "router", to: "reasoner", primary: true },
   { from: "router", to: "tools", primary: true },
-  { from: "planner", to: "reasoner", primary: true },
   { from: "planner", to: "review", primary: true },
   { from: "reasoner", to: "review", primary: true },
   { from: "tools", to: "review", primary: true },
   { from: "review", to: "output", primary: true },
-  { from: "planner", to: "tools" },
-  { from: "tools", to: "reasoner" },
 ];
 
 const mermaidGraph = `flowchart TD
@@ -134,13 +148,10 @@ const mermaidGraph = `flowchart TD
   router --> planner
   router --> reasoner
   router --> tools
-  planner --> reasoner
   planner --> review
   reasoner --> review
   tools --> review
   review --> output
-  planner -.-> tools
-  tools -.-> reasoner
 
   classDef terminal fill:#101010,stroke:#ffffff,color:#ffffff,stroke-width:1.4px
   classDef model fill:#050505,stroke:#ffffff,color:#ffffff,stroke-width:1px
@@ -186,8 +197,53 @@ function connectorPath(start: { x: number; y: number }, end: { x: number; y: num
   return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
 }
 
+const flowCycleSeconds = 8;
+const edgeTravelSeconds = 0.85;
+const nodeProcessingSeconds = 0.55;
+
+const edgeStartSeconds: Record<string, number> = {
+  "input->ingest": 0,
+  "ingest->router": 1.5,
+  "router->planner": 3,
+  "router->reasoner": 3,
+  "router->tools": 3,
+  "planner->review": 4.6,
+  "reasoner->review": 4.6,
+  "tools->review": 4.6,
+  "review->output": 6.2,
+};
+
+const initialViewBox: GraphViewBox = {
+  x: 160,
+  y: 20,
+  width: 880,
+  height: 780,
+};
+
+const minZoomWidth = 520;
+const maxZoomWidth = 1400;
+
+function edgeKey(edge: AgentEdge) {
+  return `${edge.from}->${edge.to}`;
+}
+
+function edgeBegin(edge: AgentEdge) {
+  return edgeStartSeconds[edgeKey(edge)] ?? 0;
+}
+
+function isDefaultViewBox(viewBox: GraphViewBox) {
+  return (
+    Math.abs(viewBox.x - initialViewBox.x) < 0.5 &&
+    Math.abs(viewBox.y - initialViewBox.y) < 0.5 &&
+    Math.abs(viewBox.width - initialViewBox.width) < 0.5 &&
+    Math.abs(viewBox.height - initialViewBox.height) < 0.5
+  );
+}
+
 export function AgentGraph() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isRunProgressMounted, setIsRunProgressMounted] = useState(false);
+  const [isRunProgressVisible, setIsRunProgressVisible] = useState(false);
   const [iterations, setIterations] = useState<Iteration[]>([
     {
       id: 1,
@@ -197,118 +253,390 @@ export function AgentGraph() {
     },
   ]);
   const [activeIterationId, setActiveIterationId] = useState(1);
+  const [viewBox, setViewBox] = useState<GraphViewBox>(initialViewBox);
+  const [isPanning, setIsPanning] = useState(false);
+  const lastPointerPosition = useRef<{ x: number; y: number } | null>(null);
+  const viewBoxRef = useRef<GraphViewBox>(initialViewBox);
+  const zoomAnimationFrame = useRef<number | null>(null);
+  const runProgressAnimationFrame = useRef<number | null>(null);
+  const runProgressCloseTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const activeIteration =
-    iterations.find((iteration) => iteration.id === activeIterationId) ?? iterations[0];
+  useEffect(() => {
+    function appendIteration(detail: AddIterationDetail = {}) {
+      setIterations((currentIterations) => {
+        const nextId = Math.max(0, ...currentIterations.map((iteration) => iteration.id)) + 1;
 
-  function addIteration() {
-    const nextId = Math.max(...iterations.map((iteration) => iteration.id)) + 1;
-    const nextIteration = {
-      id: nextId,
-      name: `Iteration ${nextId}`,
-      description: "New graph draft",
-      mermaid: activeIteration.mermaid,
+        setActiveIterationId(nextId);
+        setIsSidebarOpen(true);
+
+        return [
+          ...currentIterations,
+          {
+            id: nextId,
+            name: detail.name ?? `Iteration ${nextId}`,
+            description: detail.description ?? "LLM generated graph",
+            mermaid: detail.mermaid ?? mermaidGraph,
+          },
+        ];
+      });
+    }
+
+    function handleAddIteration(event: Event) {
+      const customEvent = event as CustomEvent<AddIterationDetail>;
+      appendIteration(customEvent.detail);
+    }
+
+    const iterationWindow = window as IterationWindow;
+
+    iterationWindow.addAgentGraphIteration = appendIteration;
+    window.addEventListener("agent-graph:add-iteration", handleAddIteration);
+
+    return () => {
+      if (zoomAnimationFrame.current) {
+        cancelAnimationFrame(zoomAnimationFrame.current);
+      }
+      if (runProgressAnimationFrame.current) {
+        cancelAnimationFrame(runProgressAnimationFrame.current);
+      }
+      if (runProgressCloseTimeout.current) {
+        clearTimeout(runProgressCloseTimeout.current);
+      }
+
+      delete iterationWindow.addAgentGraphIteration;
+      window.removeEventListener("agent-graph:add-iteration", handleAddIteration);
     };
+  }, []);
 
-    setIterations((currentIterations) => [...currentIterations, nextIteration]);
-    setActiveIterationId(nextId);
-    setIsSidebarOpen(true);
+  useEffect(() => {
+    viewBoxRef.current = viewBox;
+  }, [viewBox]);
+
+  function animateViewBox(targetViewBox: GraphViewBox) {
+    if (zoomAnimationFrame.current) {
+      cancelAnimationFrame(zoomAnimationFrame.current);
+    }
+
+    const startViewBox = viewBoxRef.current;
+    const startedAt = performance.now();
+    const durationMs = 140;
+
+    function tick(now: number) {
+      const progress = Math.min(1, (now - startedAt) / durationMs);
+      const easedProgress = 1 - (1 - progress) ** 3;
+      const nextViewBox = {
+        x: startViewBox.x + (targetViewBox.x - startViewBox.x) * easedProgress,
+        y: startViewBox.y + (targetViewBox.y - startViewBox.y) * easedProgress,
+        width: startViewBox.width + (targetViewBox.width - startViewBox.width) * easedProgress,
+        height:
+          startViewBox.height + (targetViewBox.height - startViewBox.height) * easedProgress,
+      };
+
+      viewBoxRef.current = nextViewBox;
+      setViewBox(nextViewBox);
+
+      if (progress < 1) {
+        zoomAnimationFrame.current = requestAnimationFrame(tick);
+      }
+    }
+
+    zoomAnimationFrame.current = requestAnimationFrame(tick);
   }
 
+  function handlePointerDown(event: PointerEvent<SVGSVGElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    if (zoomAnimationFrame.current) {
+      cancelAnimationFrame(zoomAnimationFrame.current);
+    }
+    lastPointerPosition.current = { x: event.clientX, y: event.clientY };
+    setIsPanning(true);
+  }
+
+  function handlePointerMove(event: PointerEvent<SVGSVGElement>) {
+    if (!isPanning || !lastPointerPosition.current) {
+      return;
+    }
+
+    event.preventDefault();
+    const lastPosition = lastPointerPosition.current;
+    const deltaX = event.clientX - lastPosition.x;
+    const deltaY = event.clientY - lastPosition.y;
+    const bounds = event.currentTarget.getBoundingClientRect();
+
+    lastPointerPosition.current = { x: event.clientX, y: event.clientY };
+
+    setViewBox((currentViewBox) => ({
+      ...currentViewBox,
+      x: currentViewBox.x - (deltaX * currentViewBox.width) / bounds.width,
+      y: currentViewBox.y - (deltaY * currentViewBox.height) / bounds.height,
+    }));
+  }
+
+  function handlePointerUp(event: PointerEvent<SVGSVGElement>) {
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    lastPointerPosition.current = null;
+    setIsPanning(false);
+  }
+
+  function handleWheel(event: WheelEvent<SVGSVGElement>) {
+    event.preventDefault();
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const pointerX = (event.clientX - bounds.left) / bounds.width;
+    const pointerY = (event.clientY - bounds.top) / bounds.height;
+    const zoomFactor = event.deltaY > 0 ? 1.12 : 0.88;
+
+    const currentViewBox = viewBoxRef.current;
+    const nextWidth = Math.min(maxZoomWidth, Math.max(minZoomWidth, currentViewBox.width * zoomFactor));
+    const scale = nextWidth / currentViewBox.width;
+    const nextHeight = currentViewBox.height * scale;
+    const focalX = currentViewBox.x + pointerX * currentViewBox.width;
+    const focalY = currentViewBox.y + pointerY * currentViewBox.height;
+
+    animateViewBox({
+      x: focalX - pointerX * nextWidth,
+      y: focalY - pointerY * nextHeight,
+      width: nextWidth,
+      height: nextHeight,
+    });
+  }
+
+  function resetView() {
+    animateViewBox(initialViewBox);
+  }
+
+  function openRunProgress() {
+    if (runProgressCloseTimeout.current) {
+      clearTimeout(runProgressCloseTimeout.current);
+    }
+    if (runProgressAnimationFrame.current) {
+      cancelAnimationFrame(runProgressAnimationFrame.current);
+    }
+
+    setIsRunProgressMounted(true);
+    runProgressAnimationFrame.current = requestAnimationFrame(() => {
+      setIsRunProgressVisible(true);
+    });
+  }
+
+  function closeRunProgress() {
+    if (runProgressCloseTimeout.current) {
+      clearTimeout(runProgressCloseTimeout.current);
+    }
+    if (runProgressAnimationFrame.current) {
+      cancelAnimationFrame(runProgressAnimationFrame.current);
+    }
+
+    setIsRunProgressVisible(false);
+    runProgressCloseTimeout.current = setTimeout(() => {
+      setIsRunProgressMounted(false);
+    }, 180);
+  }
+
+  const hasMovedView = !isDefaultViewBox(viewBox);
+  const isRunProgressActive = isRunProgressMounted;
+
   return (
-    <main className="relative min-h-screen overflow-hidden bg-black text-white">
+    <main
+      className={`relative min-h-screen overflow-hidden bg-black text-white ${
+        isPanning ? "select-none" : ""
+      }`}
+    >
       <h1 className="sr-only">Interconnected agent node graph</h1>
 
       <button
         type="button"
         aria-label="Open iterations"
         onClick={() => setIsSidebarOpen(true)}
-        className="absolute left-5 top-5 z-20 inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
+        className={`absolute left-5 top-5 z-20 inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35 ${
+          isSidebarOpen ? "pointer-events-none opacity-0" : "opacity-100"
+        }`}
       >
         <PanelLeft className="size-4" />
         Iterations
       </button>
 
-      <button
-        type="button"
-        onClick={addIteration}
-        className="absolute right-5 top-5 z-20 inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
+      <div
+        className={`absolute right-5 top-5 z-20 flex items-center gap-2 transition-opacity ${
+          isRunProgressActive ? "pointer-events-none opacity-0" : "opacity-100"
+        }`}
       >
-        <Plus className="size-4" />
-        Add graph
-      </button>
-
-      {isSidebarOpen ? (
-        <>
-          <aside
-            aria-label="Iterations"
-            className="absolute inset-y-0 left-0 z-30 w-[320px] border-r border-white/12 bg-black/95"
+        {hasMovedView ? (
+          <button
+            type="button"
+            onClick={resetView}
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
           >
-            <div className="flex h-14 items-center justify-between border-b border-white/10 px-4">
-              <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em] text-white/70">
-                <GitBranch className="size-4" />
-                Iterations
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsSidebarOpen(false)}
-                aria-label="Close iterations"
-                className="inline-flex size-8 items-center justify-center rounded-md text-white/60 outline-none transition hover:bg-white/8 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
-              >
-                <X className="size-4" />
-              </button>
+            <RotateCcw className="size-4" />
+            Reset view
+          </button>
+        ) : null}
+
+        <button
+          type="button"
+          aria-label="Open run progress"
+          onClick={openRunProgress}
+          className="inline-flex h-9 items-center gap-2 rounded-md border border-white/14 bg-black/80 px-3 font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/28 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
+        >
+          <Activity className="size-4" />
+          Run Progress
+        </button>
+      </div>
+
+      <aside
+        aria-label="Iterations"
+        aria-hidden={!isSidebarOpen}
+        className={`absolute inset-y-0 left-0 z-30 w-[300px] border-r border-white/12 bg-black/92 transform-gpu will-change-transform transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          isSidebarOpen
+            ? "translate-x-0"
+            : "pointer-events-none -translate-x-[calc(100%+1px)]"
+        }`}
+      >
+          <div className="flex h-14 items-center justify-between border-b border-white/10 px-4">
+            <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em] text-white/70">
+              <GitBranch className="size-4" />
+              Iterations
             </div>
+            <button
+              type="button"
+              onClick={() => setIsSidebarOpen(false)}
+              aria-label="Close iterations"
+              className="inline-flex size-8 items-center justify-center rounded-md text-white/60 outline-none transition hover:bg-white/8 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
 
-            <div className="space-y-2 p-3">
-              <button
-                type="button"
-                onClick={addIteration}
-                className="flex h-10 w-full items-center justify-center gap-2 rounded-md border border-white/14 bg-white/[0.03] font-mono text-[11px] uppercase tracking-[0.14em] text-white/72 outline-none transition hover:border-white/30 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
-              >
-                <Plus className="size-4" />
-                New graph
-              </button>
-
+          <div className="px-4 py-3">
+            <div className="space-y-2">
               {iterations.map((iteration) => (
                 <button
                   key={iteration.id}
                   type="button"
                   onClick={() => setActiveIterationId(iteration.id)}
-                  className={`w-full rounded-md border p-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-white/35 ${
+                  className={`group w-full rounded-md border px-3 py-3 text-left outline-none transition focus-visible:ring-2 focus-visible:ring-white/35 ${
                     iteration.id === activeIterationId
-                      ? "border-white/45 bg-white/[0.08]"
-                      : "border-white/10 bg-white/[0.025] hover:border-white/22"
+                      ? "border-white/44 bg-white/[0.075] text-white"
+                      : "border-white/12 bg-black text-white/54 hover:border-white/28 hover:bg-white/[0.035] hover:text-white/80"
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-white">{iteration.name}</div>
-                    <div className="font-mono text-[10px] text-white/40">v{iteration.id}</div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{iteration.name}</div>
+                      <div className="mt-1 truncate text-xs text-white/38">
+                        {iteration.description}
+                      </div>
+                    </div>
+                    <div className="shrink-0 rounded-sm border border-white/12 px-1.5 py-0.5 font-mono text-[10px] text-white/36">
+                      {String(iteration.id).padStart(2, "0")}
+                    </div>
                   </div>
-                  <div className="mt-1 text-xs text-white/45">{iteration.description}</div>
-                  <div className="mt-3 truncate font-mono text-[10px] text-white/28">
-                    {iteration.mermaid.split("\n")[0]}
+                  <div className="mt-3 flex items-center gap-2">
+                    <span
+                      className={`h-px flex-1 ${
+                        iteration.id === activeIterationId ? "bg-white/22" : "bg-white/10"
+                      }`}
+                    />
+                    <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-white/30">
+                      {iteration.id === activeIterationId ? "active" : "select"}
+                    </span>
                   </div>
                 </button>
               ))}
             </div>
-          </aside>
-          <button
-            type="button"
-            aria-label="Close iterations overlay"
-            onClick={() => setIsSidebarOpen(false)}
-            className="absolute inset-0 z-20 bg-black/35"
-          />
-        </>
+          </div>
+      </aside>
+
+      {isRunProgressMounted ? (
+        <div
+          aria-label="Run Progress"
+          className={`absolute right-5 top-5 z-30 w-[320px] origin-top-right rounded-lg border border-white/14 bg-black/95 shadow-2xl shadow-black/40 transition-[transform,opacity] duration-180 ease-out ${
+            isRunProgressVisible
+              ? "translate-y-0 scale-100 opacity-100"
+              : "-translate-y-2 scale-[0.98] opacity-0"
+          }`}
+        >
+          <div className="flex h-12 items-center justify-between border-b border-white/10 px-4">
+            <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.16em] text-white/70">
+              <Activity className="size-4" />
+              Run Progress
+            </div>
+            <button
+              type="button"
+              onClick={closeRunProgress}
+              aria-label="Close run progress"
+              className="inline-flex size-8 items-center justify-center rounded-md text-white/60 outline-none transition hover:bg-white/8 hover:text-white focus-visible:ring-2 focus-visible:ring-white/35"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+
+          <div className="space-y-3 px-4 py-4">
+            {["Input queued", "Ingest processed", "Router dispatched", "Parallel agents running", "Review pending", "Output waiting"].map(
+              (step, index) => (
+                <div key={step} className="flex items-center gap-3">
+                  <div
+                    className={`size-2 rounded-full ${
+                      index < 3 ? "bg-white" : index === 3 ? "bg-white/55" : "bg-white/18"
+                    }`}
+                  />
+                  <div className={index < 4 ? "text-sm text-white/78" : "text-sm text-white/36"}>
+                    {step}
+                  </div>
+                </div>
+              ),
+            )}
+          </div>
+        </div>
       ) : null}
 
       <svg
-        viewBox="160 20 880 780"
+        viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
         role="img"
         aria-label="Monochrome top-down procedural pipeline graph of interconnected agent nodes"
-        className="absolute inset-0 h-full w-full px-3 py-4"
+        className={`absolute inset-0 h-full w-full touch-none px-3 py-4 ${
+          isPanning ? "cursor-grabbing" : "cursor-grab"
+        }`}
         preserveAspectRatio="xMidYMid meet"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onWheel={handleWheel}
       >
         <defs>
+          <pattern id="major-grid" width="48" height="48" patternUnits="userSpaceOnUse">
+            <path d="M 48 0 H 0 V 48" fill="none" stroke="white" strokeOpacity=".055" />
+          </pattern>
+          <pattern id="minor-grid" width="12" height="12" patternUnits="userSpaceOnUse">
+            <path d="M 12 0 H 0 V 12" fill="none" stroke="white" strokeOpacity=".025" />
+          </pattern>
+          <radialGradient id="grid-mask" cx="50%" cy="50%" r="62%">
+            <stop offset="0%" stopColor="white" stopOpacity="1" />
+            <stop offset="72%" stopColor="white" stopOpacity=".8" />
+            <stop offset="100%" stopColor="white" stopOpacity="0" />
+          </radialGradient>
+          <mask id="grid-fade">
+            <rect
+              x={viewBox.x - viewBox.width}
+              y={viewBox.y - viewBox.height}
+              width={viewBox.width * 3}
+              height={viewBox.height * 3}
+              fill="url(#grid-mask)"
+            />
+          </mask>
+          <pattern
+            id="input-texture"
+            width="12"
+            height="12"
+            patternUnits="userSpaceOnUse"
+          >
+            <path d="M 12 0 L 0 12" stroke="white" strokeOpacity=".08" strokeWidth=".8" />
+          </pattern>
           <marker
             id="arrow"
             markerHeight="9"
@@ -332,6 +660,23 @@ export function AgentGraph() {
             <path d="M 0 0 L 8 4 L 0 8 z" fill="white" fillOpacity=".3" />
           </marker>
         </defs>
+        <g mask="url(#grid-fade)">
+          <rect
+            x={viewBox.x - viewBox.width}
+            y={viewBox.y - viewBox.height}
+            width={viewBox.width * 3}
+            height={viewBox.height * 3}
+            fill="url(#major-grid)"
+          />
+          <rect
+            x={viewBox.x - viewBox.width}
+            y={viewBox.y - viewBox.height}
+            width={viewBox.width * 3}
+            height={viewBox.height * 3}
+            fill="url(#minor-grid)"
+            opacity=".6"
+          />
+        </g>
         <g>
           {edges.map((edge) => {
             const from = getNode(edge.from);
@@ -363,33 +708,50 @@ export function AgentGraph() {
                 width={node.width}
                 height={node.height}
                 rx={node.terminal ? "28" : "6"}
-                fill={node.terminal ? "#101010" : "#050505"}
+                fill={node.id === "input" ? "#0d0d0d" : node.terminal ? "#101010" : "#050505"}
                 stroke="white"
-                strokeOpacity={node.terminal ? ".72" : ".5"}
-                strokeWidth={node.terminal ? "1.25" : "1"}
+                strokeOpacity={node.id === "input" ? ".96" : node.terminal ? ".72" : ".5"}
+                strokeWidth={node.id === "input" ? "1.6" : node.terminal ? "1.25" : "1"}
               />
-              <text
-                x={node.x + node.width / 2 - 16}
-                y={node.y - node.height / 2 + 18}
-                textAnchor="end"
-                className="fill-white/32 font-mono text-[7px] uppercase tracking-[0.18em]"
-              >
-                {node.terminal ? "terminal" : "model"}
-              </text>
+              {node.id === "input" ? (
+                <>
+                  <rect
+                    x={node.x - node.width / 2 + 10}
+                    y={node.y - node.height / 2 + 10}
+                    width={node.width - 20}
+                    height={node.height - 20}
+                    rx="22"
+                    fill="url(#input-texture)"
+                  />
+                  <rect
+                    x={node.x - node.width / 2 + 14}
+                    y={node.y - node.height / 2 + 14}
+                    width={node.width - 28}
+                    height={node.height - 28}
+                    rx="19"
+                    fill="none"
+                    stroke="white"
+                    strokeOpacity=".16"
+                    strokeWidth=".9"
+                  />
+                </>
+              ) : null}
               <line
                 x1={node.x - node.width / 2 + 20}
                 y1={node.y + 5}
                 x2={node.x + node.width / 2 - 20}
                 y2={node.y + 5}
                 stroke="white"
-                strokeOpacity=".16"
+                strokeOpacity={node.id === "input" ? ".24" : ".16"}
               />
               <text
                 x={node.x}
                 y={node.y - 8}
                 textAnchor="middle"
                 className={
-                  node.terminal
+                  node.id === "input"
+                    ? "fill-white font-sans text-[20px] font-semibold"
+                    : node.terminal
                     ? "fill-white font-sans text-[18px] font-semibold"
                     : "fill-white font-sans text-[17px] font-medium"
                 }
@@ -400,12 +762,102 @@ export function AgentGraph() {
                 x={node.x}
                 y={node.y + 26}
                 textAnchor="middle"
-                className="fill-white/48 font-mono text-[10px]"
+                className={
+                  node.id === "input"
+                    ? "fill-white/58 font-mono text-[10px]"
+                    : "fill-white/48 font-mono text-[10px]"
+                }
               >
                 {node.description}
               </text>
             </g>
           ))}
+        </g>
+
+        <g>
+          {edges
+            .filter((edge) => edge.primary)
+            .map((edge) => {
+              const node = getNode(edge.to);
+              const beginTime = edgeBegin(edge);
+              const holdStart = (beginTime + edgeTravelSeconds) / flowCycleSeconds;
+              const holdVisible = (beginTime + edgeTravelSeconds + 0.12) / flowCycleSeconds;
+              const holdEnd =
+                (beginTime + edgeTravelSeconds + nodeProcessingSeconds) / flowCycleSeconds;
+
+              return (
+                <rect
+                  key={`processing-${edge.from}-${edge.to}`}
+                  x={node.x - node.width / 2 - 4}
+                  y={node.y - node.height / 2 - 4}
+                  width={node.width + 8}
+                  height={node.height + 8}
+                  rx={node.terminal ? "31" : "9"}
+                  fill="none"
+                  stroke="white"
+                  strokeOpacity="0"
+                  strokeWidth="1"
+                >
+                  <animate
+                    attributeName="stroke-opacity"
+                    values="0;0;0.92;0.92;0"
+                    keyTimes={`0;${holdStart};${holdVisible};${holdEnd};1`}
+                    dur={`${flowCycleSeconds}s`}
+                    begin="0s"
+                    repeatCount="indefinite"
+                  />
+                  <animate
+                    attributeName="stroke-width"
+                    values="1;1;3;3;1"
+                    keyTimes={`0;${holdStart};${holdVisible};${holdEnd};1`}
+                    dur={`${flowCycleSeconds}s`}
+                    begin="0s"
+                    repeatCount="indefinite"
+                  />
+                </rect>
+              );
+            })}
+        </g>
+
+        <g>
+          {edges
+            .filter((edge) => edge.primary)
+            .map((edge) => {
+              const from = getNode(edge.from);
+              const to = getNode(edge.to);
+              const start = edgePoint(from, to);
+              const end = edgePoint(to, from);
+              const beginTime = edgeBegin(edge);
+              const moveStart = beginTime / flowCycleSeconds;
+              const moveEnd = (beginTime + edgeTravelSeconds) / flowCycleSeconds;
+              const holdEnd =
+                (beginTime + edgeTravelSeconds + nodeProcessingSeconds) / flowCycleSeconds;
+
+              return (
+                <circle key={`flow-${edge.from}-${edge.to}`} r="3.4" fill="white" opacity=".82">
+                  <animateMotion
+                    dur={`${flowCycleSeconds}s`}
+                    begin="0s"
+                    path={connectorPath(start, end)}
+                    keyPoints={`0;0;1;1;1`}
+                    keyTimes={`0;${moveStart};${moveEnd};${holdEnd};1`}
+                    calcMode="linear"
+                    repeatCount="indefinite"
+                  />
+                  <animate
+                    attributeName="opacity"
+                    values="0;0;.9;.9;0;0"
+                    keyTimes={`0;${moveStart};${moveStart + 0.015};${holdEnd};${Math.min(
+                      holdEnd + 0.04,
+                      0.98,
+                    )};1`}
+                    dur={`${flowCycleSeconds}s`}
+                    begin="0s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+              );
+            })}
         </g>
       </svg>
     </main>

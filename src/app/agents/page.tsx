@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ViewTransition } from "react";
 
 import { AgentGraph } from "@/components/agent-graph";
 
@@ -8,5 +9,13 @@ export const metadata: Metadata = {
 };
 
 export default function AgentsPage() {
-  return <AgentGraph />;
+  return (
+    <ViewTransition
+      enter={{ "nav-forward": "nav-forward", default: "none" }}
+      exit={{ "nav-forward": "nav-forward", default: "none" }}
+      default="none"
+    >
+      <AgentGraph />
+    </ViewTransition>
+  );
 }
