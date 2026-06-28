@@ -71,7 +71,7 @@ const digitalOceanBaseUrl = process.env.DIGITALOCEAN_MODEL_BASE_URL ?? "https://
 const chatModel = process.env.DIGITALOCEAN_CHAT_MODEL ?? "qwen3-coder-flash";
 const sttModel = process.env.LIVEKIT_AGENT_STT_MODEL ?? "deepgram/flux-general-en";
 const ttsModel = process.env.LIVEKIT_AGENT_TTS_MODEL ?? "cartesia/sonic-3.5";
-const ttsVoice = process.env.LIVEKIT_AGENT_TTS_VOICE || "694f9389-aac1-45b6-b726-9d9369183238";
+const ttsVoice = process.env.LIVEKIT_AGENT_TTS_VOICE || "e2d48e7b-cc6d-4f97-a8fd-13c1449aeebd";
 const agentId = process.env.LIVEKIT_AGENT_ID || "f1-voice-agent";
 
 export default defineAgent({
@@ -85,8 +85,8 @@ export default defineAgent({
         apiKey: livekitApiKey,
         apiSecret: livekitApiSecret,
         modelOptions: {
-          eager_eot_threshold: 0.35,
-          eot_timeout_ms: 520,
+          eager_eot_threshold: 0.55,
+          eot_timeout_ms: 900,
           language_hint: "en",
         },
       }),
@@ -103,7 +103,7 @@ export default defineAgent({
         apiKey: livekitApiKey,
         apiSecret: livekitApiSecret,
         modelOptions: {
-          speed: process.env.LIVEKIT_AGENT_TTS_SPEED || "fast",
+          speed: process.env.LIVEKIT_AGENT_TTS_SPEED || "normal",
           max_buffer_delay_ms: optionalNumberEnv("LIVEKIT_AGENT_TTS_MAX_BUFFER_DELAY_MS", 120),
         },
       }),
@@ -111,13 +111,16 @@ export default defineAgent({
       turnHandling: {
         preemptiveGeneration: {
           enabled: true,
-          preemptiveTts: true,
+          preemptiveTts: false,
           maxSpeechDuration: 8000,
           maxRetries: 3,
         },
+        interruption: {
+          enabled: false,
+        },
         endpointing: {
-          minDelay: 120,
-          maxDelay: 700,
+          minDelay: 300,
+          maxDelay: 1200,
         },
       },
       ttsTextTransforms: ["filter_markdown", "filter_emoji"],
@@ -134,10 +137,7 @@ export default defineAgent({
       room: ctx.room,
     });
 
-    session.say("Ready.", {
-      allowInterruptions: true,
-      addToChatCtx: false,
-    });
+    // Do not speak on join. The first audio should be a direct response to the user.
   },
 });
 

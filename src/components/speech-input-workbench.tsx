@@ -133,9 +133,18 @@ export function SpeechInputWorkbench() {
 
     const element = track.attach();
     element.autoplay = true;
-    element.style.display = "none";
+    element.volume = 1;
+    element.style.position = "absolute";
+    element.style.width = "1px";
+    element.style.height = "1px";
+    element.style.opacity = "0";
+    element.style.pointerEvents = "none";
     document.body.appendChild(element);
     remoteAudioElementsRef.current = [...remoteAudioElementsRef.current, element];
+
+    void element.play().catch(() => {
+      showTemporaryResponse("Audio is blocked. Click the voice button again to resume playback.");
+    });
   }
 
   function handleTrackUnsubscribed(track: RemoteTrack) {
@@ -203,6 +212,11 @@ export function SpeechInputWorkbench() {
       room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
       room.on(RoomEvent.TrackUnsubscribed, handleTrackUnsubscribed);
       room.on(RoomEvent.TranscriptionReceived, handleTranscription);
+      room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+        if (!room.canPlaybackAudio) {
+          showTemporaryResponse("Audio is blocked. Click the voice button again to resume playback.");
+        }
+      });
       room.on(RoomEvent.Disconnected, () => {
         liveKitRoomRef.current = null;
         setIsListening(false);
@@ -213,6 +227,13 @@ export function SpeechInputWorkbench() {
       await room.connect(url, token);
       await room.startAudio();
       await room.localParticipant.setMicrophoneEnabled(true);
+      room.remoteParticipants.forEach((participant) => {
+        participant.trackPublications.forEach((publication) => {
+          if (publication.track && publication.kind === Track.Kind.Audio) {
+            handleTrackSubscribed(publication.track);
+          }
+        });
+      });
       setIsListening(true);
       showTemporaryResponse("Connected. Start talking.", 2600);
     } finally {
@@ -267,44 +288,56 @@ export function SpeechInputWorkbench() {
 
   return (
     <main className="relative grid min-h-screen place-items-center overflow-hidden bg-[#030303] px-5 text-white">
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute left-1/2 top-[24%] flex -translate-x-1/2 flex-col items-center">
-          <div className="font-mono text-[clamp(4.6rem,12vw,13rem)] font-semibold uppercase leading-none tracking-[0.22em] text-white/[0.12]">
-            Bron
-          </div>
-          <div className="mt-5 h-px w-[min(44vw,430px)] bg-gradient-to-r from-transparent via-white/[0.16] to-transparent" />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 z-0 opacity-100 transition-opacity duration-300"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px)",
+          backgroundSize: "42px 42px, 42px 42px",
+          maskImage: "radial-gradient(circle at center, black 0%, black 58%, transparent 100%)",
+        }}
+      />
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-[100px] z-0 flex flex-col items-center">
+        <div className="font-sans text-[6.6rem] font-black uppercase leading-[0.78] tracking-[0.22em] text-white/[0.14] sm:text-[9.2rem] lg:text-[11.2rem]">
+          Bron
         </div>
+        <div className="mt-5 h-px w-[min(58vw,760px)] bg-gradient-to-r from-transparent via-white/[0.12] to-transparent" />
+        <p className="mt-5 max-w-2xl text-center text-lg font-medium leading-8 text-white/44">
+          Solve hard problems with Bron. Talk, upload data, and get the best agent pipeline.
+        </p>
       </div>
 
-      <section className="relative z-10 mt-24 flex w-full max-w-2xl flex-col items-center">
-        <button
-          type="button"
-          onClick={startSpeechInput}
-          aria-pressed={isListening}
-          aria-label={isListening ? "Stop voice session" : "Start voice session"}
-          className={cn(
-            "group relative flex h-16 cursor-pointer items-center gap-4 rounded-full border bg-[#080808] px-4 pr-5 text-white shadow-[0_18px_55px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.055)] outline-none transition duration-300 hover:-translate-y-0.5 hover:bg-white/[0.04] focus-visible:ring-3 focus-visible:ring-white/15",
-            hasSpeechInput
-              ? "border-emerald-400/35 bg-emerald-400/[0.035] shadow-[0_22px_70px_rgba(16,185,129,0.08),inset_0_1px_0_rgba(255,255,255,0.1)] hover:border-emerald-300/45"
-              : "border-white/14 bg-white/[0.025] hover:border-white/24",
-          )}
-        >
+      <section className="relative z-10 mt-[12rem] flex w-full flex-col items-center">
+        <div className="flex w-full max-w-4xl flex-col items-center">
+          <button
+            type="button"
+            onClick={startSpeechInput}
+            aria-pressed={isListening}
+            aria-label={isListening ? "Stop voice session" : "Start voice session"}
+            className={cn(
+              "group relative flex h-20 cursor-pointer items-center gap-5 rounded-full border bg-[#080808] px-5 pr-6 text-white shadow-[0_18px_55px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.055)] outline-none transition duration-300 hover:-translate-y-0.5 hover:bg-white/[0.04] focus-visible:ring-3 focus-visible:ring-white/15",
+              hasSpeechInput
+                ? "border-emerald-400/35 bg-emerald-400/[0.035] shadow-[0_22px_70px_rgba(16,185,129,0.08),inset_0_1px_0_rgba(255,255,255,0.1)] hover:border-emerald-300/45"
+                : "border-white/14 bg-white/[0.025] hover:border-white/24",
+            )}
+          >
           <span
             className={cn(
-              "grid size-10 place-items-center rounded-full border border-white/10 bg-white/[0.035] text-white/78 transition group-hover:border-white/18 group-hover:text-white",
+              "grid size-12 place-items-center rounded-full border border-white/10 bg-white/[0.035] text-white/78 transition group-hover:border-white/18 group-hover:text-white",
               isListening && "border-white/28 bg-white/[0.08] text-white shadow-[0_0_28px_rgba(255,255,255,0.1)]",
               hasSpeechInput && "border-emerald-300/24 bg-emerald-300/[0.075] text-white",
               !hasSpeechInput && "border-white/12 bg-white/[0.035]",
             )}
           >
-            <Mic className="size-5" strokeWidth={2.05} />
+            <Mic className="size-6" strokeWidth={2.05} />
           </span>
 
-          <span className="flex min-w-32 flex-col items-start">
-            <span className="text-sm font-medium leading-none">
+          <span className="flex min-w-40 flex-col items-start">
+            <span className="text-lg font-medium leading-none">
               {isListening ? "Live conversation" : hasSpeechInput ? "Voice captured" : "Talk to agent"}
             </span>
-            <span className="mt-1.5 text-[11px] leading-none text-white/42">
+            <span className="mt-2 text-sm leading-none text-white/42">
               {isConnectingVoice
                 ? "Connecting LiveKit"
                 : isListening
@@ -315,7 +348,7 @@ export function SpeechInputWorkbench() {
             </span>
           </span>
 
-          <span className="flex h-8 items-center gap-1 rounded-full border border-white/[0.07] bg-black/35 px-3">
+          <span className="flex h-10 items-center gap-1.5 rounded-full border border-white/[0.07] bg-black/35 px-4">
             {[12, 19, 15, 24, 14, 20, 11].map((height, index) => (
               <span
                 key={`${height}-${index}`}
@@ -333,39 +366,37 @@ export function SpeechInputWorkbench() {
               />
             ))}
           </span>
-        </button>
+          </button>
 
-        <div
-          className={cn(
-            "grid w-full place-items-center overflow-hidden transition-[grid-template-rows,opacity,margin] duration-300 ease-out",
-            showVoiceResponse
-              ? "mt-5 grid-rows-[1fr] opacity-100"
-              : "mt-0 grid-rows-[0fr] opacity-0",
-          )}
-        >
-          <p aria-live="polite" className="min-h-0 max-w-md overflow-hidden text-center text-sm text-white/38">
-            {voiceResponse || "Listening..."}
-          </p>
-        </div>
+          <div
+            className={cn(
+              "grid w-full place-items-center overflow-hidden transition-[grid-template-rows,opacity,margin] duration-300 ease-out",
+              showVoiceResponse ? "mt-5 grid-rows-[1fr] opacity-100" : "mt-0 grid-rows-[0fr] opacity-0",
+            )}
+          >
+            <p aria-live="polite" className="min-h-0 max-w-md overflow-hidden text-center text-sm text-white/38">
+              {voiceResponse || "Listening..."}
+            </p>
+          </div>
 
-        <label
-          className={cn(
-            "flex h-16 w-full cursor-pointer items-center gap-4 rounded-xl border bg-white/[0.035] px-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition-all duration-300 ease-out hover:bg-white/[0.055]",
-            showVoiceResponse ? "mt-8" : "mt-9",
-            hasDataInput
-              ? "border-emerald-400/35 bg-emerald-400/[0.025] hover:border-emerald-300/45"
-              : "border-white/14 bg-white/[0.025] hover:border-white/24",
-          )}
-        >
+          <label
+            className={cn(
+              "flex h-20 w-full max-w-3xl cursor-pointer items-center gap-5 rounded-xl border bg-white/[0.035] px-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition-all duration-300 ease-out hover:bg-white/[0.055]",
+              showVoiceResponse ? "mt-8" : "mt-9",
+              hasDataInput
+                ? "border-emerald-400/35 bg-emerald-400/[0.025] hover:border-emerald-300/45"
+                : "border-white/14 bg-white/[0.025] hover:border-white/24",
+            )}
+          >
           <Upload
             className={cn(
-              "size-5 shrink-0 text-white/58",
+              "size-6 shrink-0 text-white/58",
               hasDataInput ? "text-emerald-200/72" : "text-white/52",
             )}
             strokeWidth={1.8}
           />
-          <span className="min-w-0 flex-1 truncate text-base text-white/58">{fileName || "Upload data"}</span>
-          <span className="shrink-0 text-base font-medium text-white/90">Browse</span>
+          <span className="min-w-0 flex-1 truncate text-xl text-white/58">{fileName || "Upload data"}</span>
+          <span className="shrink-0 text-xl font-medium text-white/90">Browse</span>
           <input
             ref={fileInputRef}
             type="file"
@@ -373,7 +404,8 @@ export function SpeechInputWorkbench() {
             className="sr-only"
             onChange={(event) => handleFiles(event.target.files)}
           />
-        </label>
+          </label>
+        </div>
       </section>
 
       {process.env.NODE_ENV !== "production" ? (

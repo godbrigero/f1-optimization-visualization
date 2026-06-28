@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ViewTransition } from "react";
 import { SpeechInputWorkbench } from "@/components/speech-input-workbench";
+import { StrategyScrollStory } from "@/components/strategy-scroll-story";
 
 export const metadata: Metadata = {
   title: "Speech Input | F1 Optimization Visualization",
@@ -15,6 +16,7 @@ export default function SpeechPage() {
       default="none"
     >
       <SpeechInputWorkbench />
+      <StrategyScrollStory />
     </ViewTransition>
   );
 }
